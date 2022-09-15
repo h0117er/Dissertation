@@ -1,0 +1,2852 @@
+---
+title: 'Spatial Analysis of Digital Image Correlation Data from Modified Arcane Fixture Tests'
+author: 'Eui Rim Hwang'
+date: 'September 2022'
+institution: 'University of Bath'
+division: 'Data Sciences \& Statistics'
+supervisor: 'Dr Karim Anaya-Izquierdo'
+# If you have more two advisors, un-silence line 7
+#altadvisor: 'Your Other Advisor'
+department: 'Mathematical sciences'
+knit: bookdown::render_book
+site: bookdown::bookdown_site
+
+# The next two lines allow you to change the spacing in your thesis. You can 
+# switch out \onehalfspacing with \singlespacing or \doublespacing, if desired.
+header-includes:
+    - \usepackage{setspace}\singlespacing
+
+# This will automatically install the {remotes} package and {thesisdown}
+# Change this to FALSE if you'd like to install them manually on your own.
+params:
+  'Install needed packages for {thesisdown}': True
+  
+# Remove the hashtag to specify which version of output you would like.
+# Can only choose one at a time.
+output:
+  thesisdown::thesis_pdf: default
+ # thesisdown::thesis_gitbook: default
+#  thesisdown::thesis_word: default
+#  thesisdown::thesis_epub: default
+
+# If you are creating a PDF you'll need to write your preliminary content 
+# (e.g., abstract, acknowledgements) below or use code similar to line 25-26 
+# for the .RMD files. If you are NOT producing a PDF, delete or silence
+# lines 25-39 in this YAML header.
+abstract: '`r if(knitr:::is_latex_output()) paste(readLines(here::here("prelims", "00-abstract.Rmd")), collapse = "\n  ")`'
+# If you'd rather include the preliminary content in files instead of inline
+# like below, use a command like that for the abstract above.  Note that a tab 
+# is needed on the line after the `|`.
+
+# Specify the location of the bibliography below
+bibliography: bib/thesis.bib
+# Download your specific csl file and refer to it in the line below.
+csl: csl/apa.csl
+lot: true
+lof: true
+---
+
+
+```{r include_packages, include=FALSE}
+# This chunk ensures that the thesisdown package is
+# installed and loaded. This thesisdown package includes
+# the template files for the thesis.
+if (!require(remotes)) {
+  if (params$`Install needed packages for {thesisdown}`) {
+    install.packages("remotes", repos = "https://cran.rstudio.com")
+  } else {
+    stop(
+      paste('You need to run install.packages("remotes")",
+            "first in the Console.')
+    )
+  }
+}
+if (!require(thesisdown)) {
+  if (params$`Install needed packages for {thesisdown}`) {
+    remotes::install_github("ismayc/thesisdown")
+  } else {
+    stop(
+      paste(
+        "You need to run",
+        'remotes::install_github("ismayc/thesisdown")',
+        "first in the Console."
+      )
+    )
+  }
+}
+library(thesisdown)
+# Set how wide the R output will go
+options(width = 70)
+```
+
+<!--
+The acknowledgments, preface, dedication, and abstract are added into the PDF
+version automatically by inputting them in the YAML at the top of this file.
+Alternatively, you can put that content in files like 00--prelim.Rmd and
+00-abstract.Rmd like done below.
+-->
+
+<!--
+
+```{r eval=!knitr::is_latex_output(), child=here::here("prelims", "00-abstract.Rmd")}
+```
+
+ The {.unnumbered} option here means that the introduction will be 
+"Chapter 0." You can also use {-} for no numbers on chapters.
+-->
+
+
+```{r setup, include=FALSE,echo= FALSE}
+knitr::opts_chunk$set(echo = FALSE,warning = FALSE, message = FALSE)
+
+rm(list = ls())
+```
+
+
+```{r,message=FALSE,warning=FALSE,echo= FALSE}
+library(INLA)
+# inla.upgrade(testing=TRUE) # for the testing version
+library(mgcv)
+library(rgeos)
+# install.packages("rgdal", dependencies = TRUE)
+library(png)
+library(jpeg)
+library(tidyverse)
+library(patchwork)
+library(broom)
+library(paletteer)
+library(gridExtra)
+library(grid)
+library(ggplot2)
+library(cowplot)
+library(fdaPDE)
+library(rgl)
+library(viridis)
+library(viridisLite)
+library(spam)
+library(fields)
+
+# change to your directy (but leave Karim's commented )
+
+ # setwd("~/Library/CloudStorage/OneDrive-UniversityofBath/Teaching/MSc summer projects/MSc project 2022/Eui Rim Hwang/dissertation")
+
+setwd("/Users/h/Library/CloudStorage/OneDrive-UniversityofBath/MSc project 2022/Eui Rim Hwang/dissertation/my_thesis")
+#set.seed(round(-digamma(1)*1e6))
+
+
+# dat - argument- is a data-frame that contains the variable `corrW` with respect which we will remove outliers from. Later we can change to other variable (corrU or corrV)
+rm_outliers<-function(dat,thrs=0.005,Nq=10001,prop_left=0.1,prop_right=0.1){
+#we can add arguments as parameters of this function e.g. 
+# thrs, 
+#corrW(the variable of interst), 
+#Nq
+# 0.1 and 0.9 for left and right
+  
+ dat_rm<-dat %>% 
+   filter(corrW>Inf)
+# we define gap between data clusters via difference between sample quantiles
+# thresholds for the difference between consecutive quantiles
+# effectively, the maximum gap between data clusters
+# thrs<- 0.01
+
+## the  larger the less we remove
+v<-dat$corrW
+
+#Nq<-10001 # resolution for the quantile separation (0.01%)
+
+
+qq      <- quantile(v, seq(0, 1  , length.out=Nq),type=1)
+
+
+
+delta<-max(diff(qq))
+
+delta
+
+
+while(delta>thrs){
+
+  # print("another")
+  # print(delta)
+
+qq_left <- quantile(v, seq(0,prop_left, length.out=(Nq-1)*0.1+1),type=1)
+
+
+rm_left  <- max(which(diff(qq_left)>thrs))
+q_left<-qq[rm_left]
+q_left
+
+qq_right<-quantile(v, seq(1-prop_right, 1, length.out=(Nq-1)*0.1+1),type=1)
+
+rm_right <- Nq-length(which(diff(qq_right)>thrs))+1
+
+q_right<-qq[rm_right]
+q_right
+
+if (!(is.na(q_left)|is.na(q_right))){
+  # we keep the outliers just in case we need them later
+
+dat_rm<-
+dat %>% 
+  filter((corrW<=q_left)|
+         (corrW>=q_right))%>% 
+      bind_rows(dat_rm)
+
+dat<-
+dat %>% 
+  filter(corrW > q_left,
+         corrW < q_right)
+
+}else{
+  
+  if(is.na(q_left)&(!is.na(q_right))){
+    
+    dat_rm<-
+dat %>% 
+  filter(corrW>=q_right)%>% 
+      bind_rows(dat_rm)
+
+dat<-
+dat %>% 
+  filter(corrW < q_right)
+    
+  }else{
+    
+    if(is.na(q_right)&(!is.na(q_left))){
+    
+    dat_rm<-
+dat %>% 
+  filter(corrW<=q_left)%>% 
+      bind_rows(dat_rm)
+
+dat<-
+dat %>% 
+  filter(corrW > q_left)
+    
+    }else{
+      break
+    }
+    }
+}
+
+v<-dat$corrW
+
+qq      <- quantile(v, seq(0, 1  , length.out=Nq),type=1)
+
+delta<-max(diff(qq))
+
+#delta
+}
+
+
+return(list(dat,dat_rm))
+
+}
+
+
+```
+
+
+# Introduction {#intro}
+
+
+
+## Background on engineering terms
+
+According to the International Air Transport Association (IATA), it is estimated a strong rebound to have air travel in 2022 [1]. It is therefore vital to study the composite materials in order to take passengers' safety and reduce the risk of accidents which occur around 115.4 cases annually last 10 years [2] as the aircraft consists of more than 50% of composite materials including the specimen that we are interested in [3]. Therefore, I will explain important terms in Engineering below for understanding this experiment.
+
+* **Aerospace Laminated Composite Materials**
+
+Laminated composite materials generally consist of more than two layers of material stacked one by one bonded together by resin and each layer is called a _lamina_. In aerospace applications, each lamina is made with very thin parallel and elastic carbon fibres. The main advantage of laminated composite material is part from their optimal strength together with reduced weight and durability as well as ease of maintenance. Unidirectional composite materials, used in aerospace applications, are stacked with individual laminae which have single angle orientations such as [$0^{\circ}$,$45^{\circ}$, $90^{\circ}$,$-45^{\circ}$]  on top of one another held together. Here the zero angle represents a particular reference direction.  Each particular configuration of angle orientations, called the lay-up,  has a different influence on  strength of composite laminates as well as its modes of failure [4]. Mechanical engineers look through different layup configurations to reinforce laminated composite materials and make them stronger. The effect of different lay-up configurations  is usually investigated with multiaxial loading experiments where the angle and the direction of the force applied to the material are controlled factors. 
+
+<center>
+![A typical composite laminate lay-up with the fibre orientations](./images/laminates_fig.png){#fig1 .class width=40% height=30%}
+</center>
+
+* **Basic solid Mechanics**
+
+Under multiaxial experiments,  tension, compression and shear forces are commonly applied to laminates. 
+
+Tension, is described as the pulling force transmitted axially [7] and acts perpendicular to the surface of an object in physics [8]. Usually, laminates stretch and get longer when this force applies while compression makes them shorter or bend. 
+
+Compression is generally defined as the opposite meaning of tension. In other words, it is the one way to push forces on a composite material or structure. This behaviour is important to identify the strength of materials or structures in Engineering. In particular, it is considered that the levels of loading are directed in one direction as uniaxial compression in this experiment [9].
+
+Shear force occurs when two forces in opposite directions act on the laminate so that the laminate undergoes deformation.
+
+
+For these types of experiments, the change of angle of the force (called the loading angle) is crucial to define damage in structures. To measure damage, displacement and shearing are commonly used. The combination of tension, compression and shearing on the specimen is what aeroplanes undergo when flying, the lab experiments are just trying to recreate that to identify the effect of this basic mechanic statistically. As displacement is defined as the difference vector between the starting point (before the load is applied) and the final point (after load application) for each point in the laminate. We will, therefore, focus on how the displacement be changed within the laminate. 
+
+
+<center>
+![Basic forces in solid mechanics](./images/solid mechanic.jpg){#fig2 .class width=65% height=30%}
+</center>
+
+## Motivation
+
+Spatial-temporal data analysis is the study to investigate the change over space and time. This method is used widely not only in climatology and epidemiology but in sociology for analysing geo-referenced data and investigating the effect on space as well [19]. To construct a spatial random effects model on a finite domain like a 2 dimensional Gaussian field, there are 4 major advantages [5]: 
+
+- user-friendly to deal with big data
+- expandable 
+- prediction under the linear algebraic approaches
+- alleviating the uncertainty and presuming the estimates
+
+With these advantages, we now know that considering time and space together is important to understand why and how changes happen. In other words, it describes the understanding of the temporal evolution of these processes in a certain area. Particularly, the spatial dependency we are interested in allows simulation at a certain point by measuring the distance between two arbitrary data points. Depending on the distance, we can interpret the patterns such as the similarity or difference between points as well. For example, the skin (fuselage) of the plane and this will try to be recreated by a small piece of materials subjected to different forces. Once the plane resists the air pressure during landing, taking off and floating, the compression or shearing we mentioned above will be applied to the small piece of materials.  Therefore, I demonstrate the spatial dependencies that refer to how associated pairs of displacement observations depend on each other. The traditional approach is to assume that the dependence between two observations solely depends on the distance between the two corresponding spatial locations. However, each specimen tested has a hole in the middle, so the effect of the distance between two points on opposite sides of the hole cannot be the same as the effect of two points (at the same distance) for which the line that joins them does not go across the hole. That is to say, the region of the surface of the tested specimen has a hole as the figure (1.3). The shape of the space domain in figure (1.3) corresponds to the shape of a tested specimen. We will implement the techniques with this boundary. 
+
+<center>
+![The diagram for understanding the effect of the distance between two points](./images/diagram.png){#fig3 .class width=65% height=30%}
+</center>
+
+As can be seen above, there are 4 arbitrary points, A, B, C and D within the boundary and note that d(A, B) = d(B, C) = d(C, D) under the Euclidean distance equation. Under continuity, the closer the points are, the values of functions are also close which in turn implies a high positive correlation. Therefore, we assume the distances of AB, BC, and CD are identical. Based on distance, we will approximate the estimation of the dependency, and the following relation can be found as there is a hole in the middle:
+
+$$
+\textrm{corr}(disp_A, disp_B)\textrm{ = corr}(disp_C,disp_D)\ne\textrm{ corr}(disp_B, disp_C)
+$$
+where $disp_i$ indicate displacements of the specimen. To deal with this issue we use three following statistical modeling tools: soap film smoothing, stochastic partial differential equations (SPDE) and finite element spatial splines models under GAMs are applied. 
+
+In this work, we use the magnitude of the load force (in kiloNewtons). This is because loading force is more informative to explain the relationship between load and damage (displacement) for engineers. Out-plane displacement utilised for spatial analysis refers to the component of the displacement vector that points orthogonally outside to the surface of the tested specimen in this thesis. Therefore, the levels of loads are informative and the approaches we use here will be to describe the changing of spatial behaviour when loading force changes. 
+
+
+## Aims and Objectives of the Project 
+
+The main aim of this project is to investigate the progression of the displacement field until failure of the specimen using the spatial approach described above.
+
+The mechanical engineers that generated the data [11] already described quantitatively the effects of ply thickness and fibre orientations in the specimens. In this work, we quantify these effects using formal statistical methods. We also highlight the differences between traditional spatial methods where the presence of a hole is ignored.
+
+In summary, we will conduct modelling of the spatial dependence of the displacement taking into account the restriction imposed by the hole. We not only use sophisticated (non-standard) spatial methods to do this, but standard methods are also used to assume there is no hole for example. We also model and predict the values of the displacement over the whole domain of interest where around the hole and in the curved edges and reproduce the data observed quite faithfully. We finally use our modelling and predictions to explore the evolution of the specimens' displacements towards their failure that happens when the load passes some threshold. Therefore, it is expected to get knowledge of spatial analysis and how to develop the modelling with the papers throughout this research. As well as implementing the spatial variation of the displacement with sophisticated techniques in the methodological prospect, I will compare the methods visually and concentrate on their characteristics. 
+For outcomes of this project, it is expected to get knowledge of generalised additive models and how to develop the models with spatial data. As well as implementing the spatial variation of the displacement for each loading force with sophisticated techniques in the methodological prospect, I will explore the conventional spatial models.
+  
+## Guidance for codes
+
+All the statistical computing done in R for this dissertation is available in the following GitHub repository below.\
+
+https://github.bath.ac.uk/eh2025/MSc-Data-Science-and-Statistics-dissertation-code \
+
+The data used is only available upon request as it does not belong to the author of this dissertation. 
+
+
+# Load-to-failure Imaging Data {#rmd-dataset}
+
+## Description of experiment
+
+The experiment was performed to identify the lay-up effects with ply thickness and the multidirectional laminates, that the angles were assigned as $0^{\circ}$, $-45^{\circ}$, $90^{\circ}$, and $45^{\circ}$ in each lamina. A new MAF machine was designed to test the strength of the specimen in this experiment and applied the loading level until the failure of the structure with forces such as compression, tension or shearing I described above progressed. Furthermore, this modified one is enable unlimited testing of specimens to experiment with tension, compression, shear, combined tension/shear and combined compression/shear loadings [11]. With two boomerang-shaped arms in the new MAF, the angle $\alpha$ is represented as can be seen above in fig 3. For example, $\alpha$ is shown that range from $0^{\circ}$,  tension-shear ($\alpha$ = $15^{\circ} - 75^{\circ}$), pure shear ($\alpha = 90^{\circ}$), and to compression ($\alpha = 180^{\circ}$).
+
+```{r,echo=FALSE, fig.cap="Left: A new MAF machine with loading configurations, Right: A specimen with a hole", fig.align='center', fig.height=3, fig.width=4}
+
+img1 <-  rasterGrob(as.raster(readPNG("./images/newMAF.png")), interpolate = FALSE)
+img2 <-  rasterGrob(as.raster(readPNG("./images/specimen.png")), interpolate = FALSE)
+grid.arrange(img1, img2, ncol = 2)
+```
+
+
+As well as the orientations in laminae, ply thickness and the size of open-hole affect the strength of specimens significantly. In particular, this open-hole shape is commonly used to connect two different parts with a rivet or screw in the aerospace industry. This shape helps identify the dependencies and effect on how much the hole is concentrated on stress until cracks. 
+
+<center>
+![coordinates in 2 dimensional images (explanatory variables)](./images/coordinates.png){#fig5}
+</center>
+
+The other main characteristic of this experiment is that stereo DIC was used for the assessment of the load response of the specimens. The coordinates were derived from 2 cameras and listed in the table, where $x$ and $y$ are the principal axes of the undeformed structure, $u$ represents the horizontal, $v$ the vertical and $w$ the out-of-plane displacement, respectively [11]. However, realigned and calibrated coordinates will be used for this work because the data was corrected in the process of combining. We introduce the principle of how to work DIC to measure displacement in detail below. 
+
+### The principle of working digital image correlation (DIC)
+
+Digital image correlation referred to as DIC uses images from two cameras non-contact to obtain full field shape deformation and data which has been sheared or compressed. By using 2 cameras, we can get the deformation of the specimen and any shape of any motion each. The specimen must be flat and planar to the image sensor and must not be out of the field to avoid bias in data. Digital image correlation can be used for a range of applications such as the aerospace industry in our case, and lenses and cameras are selected based on the field of view and the speed of the event. In our experiment, two Imager E-Lite 5 M and Sigma 105 mm f/2.8 were specified for cameras and lenses, respectively [11]. Here, we use the data for the small specimen with a hole for the aerospace industry. These two cameras are available to preserve 3-d information similar to human eyes that allow depth perception. 
+
+<center>
+![DIC system for 3D similar to the logic of human eyes](./images/dic_system.png){#fig6 .class width=40% height=30%}
+</center>
+
+It will produce bias during the resolution with the proper transfer function below. So, in order to avoid bias in our data for 3-dimensional applications, the specimen ought to be flat, and planar and keep the distance consistent from the sensor during the experiment. Also, the specimen must not move towards or away from the camera [6]. Further, to track and calculate the correlation, we have a cloud of X and Y global coordinates and U, V and W displacement vectors as mentioned in table (2.1). Each data point has displacement, however, we will only refer to out-of-plane W of interest. To measure displacements in a lab experiment, we need three neighbouring locations [6]. As the DIC data can be converted to a triangular mesh, we can compute the tangent to the surface called out-of-displacement. 
+
+```{r,echo=FALSE, fig.cap="The formula[6] for converting from 3D to 2D to get X and Y coordinates and U,V, and W displacement vectors in DIC", fig.align='center', fig.height=3, fig.width=3}
+
+img1 <-  rasterGrob(as.raster(readPNG("./images/dic_formula.png")), interpolate = FALSE)
+grid.arrange(img1)
+```
+
+In summary, digital image correlation (DIC) helps to reform the shapes and displacements matching the subsets with three neighbouring data points to construct the mesh triangulation. It is inevitable to avoid the uncertainty and noise called bias to combine the data through the DIC, therefore, we are aware of, but ignore the bias in this paper. 
+
+
+```{r,echo=FALSE, fig.cap="Carbon/epoxy laminates subjected to combined tension-shear and compression-shear loading", fig.align='center', fig.height=5, fig.width=5}
+
+img1 <-  rasterGrob(as.raster(readJPEG("./images/laminates.jpg")), interpolate = FALSE)
+grid.arrange(img1)
+```
+
+
+The data, in this project, is primarily performed by three types of laminates with different thickness and angle orientations. Firstly, to figure out the effect of the thickness, Laminate 1 and Laminate 2 are compared at 0.291mm and 0.144mm respectively. Whilst, Laminate 2 and Laminate 3 are made from piles with different angle configurations such as $45^{\circ}$ and $22.5^{\circ}$ to identify the strength of the multi-directional loading [11].  
+
+
+## Exploratory analysis
+
+The data set has been provided by engineers who conducted the experiment to illustrate the spatial features of the failure evolution of the specimen. The data we will define consists of 2-dimensional images, as described above, and response variables is out-of-plane displacement for each load level until the failure of the object. Whereas, explanatory variables are ply thickness (thick or thin), Fibre angle configuration, complex strain fields such as tension or compression etc and $xy$-coordinate systems with the principal axes of a deformed specimen. 
+
+
+```{r table1, fig.align='center'}
+knitr::kable(
+  data.frame(
+    "Variable Name" = c("CorrX", "CorrY","CorrU","CorrV","CorrW"), "Description" = c("The global x position coordinate","The global y position coordinate","The horizontal displacement u coordinate of the specimen","The vertical displacement v coordinate of the specimen","The out-of-plane displacement w coordinate of the specimen")
+  ), 
+  caption = "Description of the variates"
+)
+```
+
+
+To be detailed, for each folder, we have information on each experiment which was subgrouped into the thickness and angle orientations. These subset experiments consist of around 141 files under each load level and each file has original coordinates and out-of-displacement, however, we will use corrected coordinates as this data is merged from two cameras and transformed to correspond to the centre of the hole. CorrW in the data, in particular, is our main interest for spatial analysis and CorrU and CorrV will be the interest when I apply spatial-temporal data analysis later on.
+
+
+```{r import ,echo= FALSE}
+#import dataset
+loads_13  <- 
+  read_delim("../data/quasi-static-fail-thickS13.csv",delim=";") %>% 
+    rename(load = " Analog In ai0 [kN] ") %>% 
+      select(load)
+
+dic_13_110 <- suppressMessages(suppressWarnings(read_csv("../data/quasi-static-fail-thickS13_0110_0.tiff.csv")))
+dic_13_115 <- suppressMessages(suppressWarnings(read_csv("../data/quasi-static-fail-thickS13_0115_0.tiff.csv")))
+dic_13_120 <- suppressMessages(suppressWarnings(read_csv("../data/quasi-static-fail-thickS13_0120_0.tiff.csv")))
+dic_13_125 <- suppressMessages(suppressWarnings(read_csv("../data/quasi-static-fail-thickS13_0125_0.tiff.csv")))
+dic_13_129 <- suppressMessages(suppressWarnings(read_csv("../data/quasi-static-fail-thickS13_0129_0.tiff.csv")))
+dic_13_130 <- suppressMessages(suppressWarnings(read_csv("../data/quasi-static-fail-thickS13_0130_0.tiff.csv")))
+
+dic_13_110<-
+  dic_13_110 %>% 
+    select(corrX,corrY,corrZ,corrU,corrV,corrW)%>% 
+      na.omit()
+dic_13_115<-
+  dic_13_115 %>% 
+    select(corrX,corrY,corrZ,corrU,corrV,corrW)%>% 
+      na.omit()
+dic_13_120<-
+  dic_13_120 %>% 
+    select(corrX,corrY,corrZ,corrU,corrV,corrW)%>% 
+      na.omit()
+dic_13_125<-
+  dic_13_125 %>% 
+    select(corrX,corrY,corrZ,corrU,corrV,corrW)%>% 
+      na.omit()
+dic_13_129<-
+  dic_13_129 %>% 
+    select(corrX,corrY,corrZ,corrU,corrV,corrW)%>% 
+      na.omit()
+dic_13_130<-
+  dic_13_130 %>% 
+    select(corrX,corrY,corrZ,corrU,corrV,corrW)%>% 
+      na.omit()
+
+
+# removing outliers using functions - rm_outliers
+dic_110 <- rm_outliers(dic_13_110)[[1]]
+dic_110_rm <- rm_outliers(dic_13_110)[[2]]
+dic_115 <- rm_outliers(dic_13_115)[[1]]
+dic_115_rm <- rm_outliers(dic_13_115)[[2]]
+dic_120 <- rm_outliers(dic_13_120)[[1]]
+dic_120_rm <- rm_outliers(dic_13_120)[[2]]
+dic_125 <- rm_outliers(dic_13_125)[[1]]
+dic_125_rm <- rm_outliers(dic_13_125)[[2]]
+dic_129 <- rm_outliers(dic_13_129)[[1]]
+dic_129_rm <- rm_outliers(dic_13_129)[[2]]
+dic_130 <- rm_outliers(dic_13_130)[[1]]
+dic_130_rm <- rm_outliers(dic_13_130)[[2]]
+```
+
+### Preprocessing of the data
+
+
+To remove outliers, we define the gap between data clusters via the difference between sample quantiles. Then I set the threshold equal to a small value like 0.005 for the difference between consecutive quantiles. If the outliers are removed until there is no more significant gap than we already set, they will be saved separately as removed outliers and transformed data set. 
+
+The idea of doing this is twofold: 
+
+- We obtain more homogeneous values for the displacement as
+ modelling of spatial dependence is usually quite sensitive to outliers.
+
+- The values that we are removing are really not of interest to the engineers since they correspond to some unrealistic measurement errors.
+
+```{r fig.align="center",fig.cap="The distribution of the data and the reason why we should remove the outliers. (left), After manipulation (right)", fig.height=4}
+par(mfrow=c(1,2),mai=c(0.01,0.2,1,0.1))
+hist(dic_13_120$corrW, breaks = 50, ylim=c(0,0.05), freq=F, main  = "Histogram with outliers", xlab="Displacements", ylab="Density of the data")
+hist(dic_120$corrW, breaks = 50, ylim=c(0,0.05), freq=F, main  = "Histogram after removing outliers", xlab="Displacements", ylab="Density of the data")
+```
+
+
+
+
+### Data visualisation
+
+Also, most specimens start breaking down when the load will be over 16.68089 kN from the edge or around the hole. Hence, the data will be examined between 14.71418 kN and 16.5487 kN or more in this paper. Our interest is the change around the hole under pressure so if the hole breaks down, it is not necessary to look through the data. After wrangling the data visually by looking at heat maps, we want to see how changes the condition of structures over kiloNewton visually using \texttt{paletteer}. When we assume that there are diagonal patterns, the damage starts from the edge of the right upper side and the left lower side which looks like it happens alongside the axis as can be seen in the  plots below. As progressed the level of multiaxial loadings, both edges are cracked and the area around the hole also suffers. Even though each data frame has different ranges after manipulation, the darker colour such as purple means a large displacement which usually leads to breakage of the specimen.  
+
+
+```{r, echo= FALSE, fig.cap="Described how much change of cracks over load levels.", fig.align='center'}
+# range(dic_125$corrW)
+# range(dic_126$corrW)
+# range(dic_127$corrW)
+# range(dic_128$corrW)
+# range(dic_129$corrW)
+# range(dic_130$corrW)
+
+range <- c(-0.35,0.07)
+plot2<-
+dic_110 %>% 
+  ggplot(aes(corrX,corrY))+
+        stat_summary_2d(aes(z=corrW),bins=150) + 
+        scale_fill_viridis_c(option="plasma",
+                             breaks=range,
+                             limits=range)+ 
+          labs(subtitle="14.71418kN")
+
+
+plot3<-
+dic_115 %>% 
+  ggplot(aes(corrX,corrY))+
+        stat_summary_2d(aes(z=corrW),bins=150) + 
+        scale_fill_viridis_c(option="plasma",
+                             breaks=range,
+                             limits=range)+ 
+          labs(subtitle="15.37513kN")
+
+plot4<-
+dic_120 %>% 
+  ggplot(aes(corrX,corrY))+
+       stat_summary_2d(aes(z=corrW),bins=150) + 
+        scale_fill_viridis_c(option="plasma",
+                             breaks=range,
+                             limits=range)+
+          labs(subtitle="15.98287kN")
+
+plot5<-
+dic_125 %>% 
+  ggplot(aes(corrX,corrY))+
+       stat_summary_2d(aes(z=corrW),bins=150) + 
+        scale_fill_viridis_c(option="plasma",
+                             breaks=range,
+                             limits=range)+
+          labs(subtitle="16.5487kN")
+plot6<-
+dic_129 %>% 
+  ggplot(aes(corrX,corrY))+
+       stat_summary_2d(aes(z=corrW),bins=150) + 
+        scale_fill_viridis_c(option="plasma",
+                             breaks=range,
+                             limits=range)+
+          labs(subtitle="15.04304kN")
+plot7<-
+dic_130 %>% 
+  ggplot(aes(corrX,corrY))+
+       stat_summary_2d(aes(z=corrW),bins=150) + 
+        scale_fill_viridis_c(option="plasma",
+                             breaks=range,
+                             limits=range)+
+          labs(subtitle="14.91892kN")
+
+(plot2+theme(legend.position = "none")+plot3+theme(legend.position = "none")+plot4)/(plot5+theme(legend.position = "none")+plot6+theme(legend.position = "none")+plot7) + plot_annotation(
+  title = "The visual progress of specimen breakage")
+```
+
+As can be seen above, there are white parts as missing values after manipulation. We save those parts separately to identify if they are meaningful, however, these plots are indicated by the data after removing outliers. The specimen endures the combination of compression and shearing until the level of 16.5487kN, after this, starts to crack the curved edges and the area around the hole. From the parts of damages, we can see spatial dependence values are getting lower. 
+
+
+<!--chapter:end:index.Rmd-->
+
+# Literature Review {#lit_rev}
+
+<!-- Required to number equations in HTML files -->
+<script type="text/x-mathjax-config">
+MathJax.Hub.Config({
+  TeX: { equationNumbers: { autoNumber: "AMS" } }
+});
+</script>
+
+
+We have seen through the visualisation after preprocessing the data and got ready to apply techniques. In this chapter, we will focus on the methods themselves independently in a general context.
+
+## Generalised additive models (GAMs)
+
+A generalised additive model is a generalised model with a linear predictor including a sum of smooth functions of covariates, described by Simon N. Wood in ‘Generalized Additive Models: An introduction with R’ [12]. The aim of these models is not only to allow to determine the dependencies of the response variable on the covariate flexibly, but to specify the model with smooth function as well. 
+
+To explore the development of the GAMs, we have to understand a distributional regression first and want a well-behaved model for Dist($y|x$) using the regression. Let a regression model be assumed. Denote that $y$ is a response variable and $x$ is a vector of covariates. The illustrated model is like below:
+\begin{equation}
+\label{eqn:gam_1}
+  y|x \sim N\{y|\mu = \theta (x), \phi\}
+\end{equation}
+
+where $\mu = E(y|x)$, $\phi = Var(y)$ and $\theta_i (x), i = 1,...,p$ are parameters if $p$ is the length of a vector of explanatory variables $x$. With this formula, a equation in an additive Gaussian model to be extended is 
+
+\begin{equation}
+\label{eqn:gam_2}
+  y|x \sim \textrm{Distr}\{y|\theta_1 = \mu(x), \theta_2,...,\theta_p\}
+\end{equation}
+where $E(y|x) = \mu(x) = g^{-1}\{ \sum_{j=1}^{m}f_j(x)\}$ and $g^{-1}$ is the link function. In this formula (3.2), $f_j$ is dependent on coefficient $\beta$ as smooth effect and can be fixed. 
+
+The above model (3.2) can be modified in terms of $g$ functions below:
+
+\begin{equation}
+\label{eqn:gam_3}
+  g(\mu_i) =  \textbf A_i \boldsymbol\theta + f_1(x_{1i}) + f_2(x_{2i}) + f_3(x_{3i}, x_{4i})+ ...
+\end{equation}
+
+where $\mu_i$ is congruent to the expected value of $Y_i$ and $Y_i  \sim\textbf{EF}(\mu_i, \phi)$. $Y_i$ is a response variable of the exponential family distribution with the mean $\mu_i$ and scale parameter $\phi$. $f_j$ are smooth functions, $A_i$ corresponds to the row vector for any strictly parametric model components and $\theta$ is the parameter vector. More generally, we can depict the formula below:
+
+\begin{equation}
+\label{eqn:gam_4}
+g(\mu_i) = \sum_{i=1}^n \{y_i-f(x_i)\}^2 + \sum^j \lambda_j\int f_j^{''}(x)^2 dx
+\end{equation}
+
+where it is represented the sum of square errors in the first term and the second term is the smooth function with the penalty. The estimation method minimises this smooth function and that is the soap film method. Also, this second term as a penalty term is positive and penalises when the function is too wiggly so it gives preferences to more smooth behaviours. $\lambda$ is the tunable variable to control the relative weight. This model will be used with soap film smoothing, SPDE and finite element spatial spline methods we will explain below rather than being used solely. Using the \texttt{gam} function from the package \texttt{mgcv} in R, we will consider smoother and GAM theory.
+
+The limitation of this approach is that the parameter chooses the smoothness so that it will be stuck in the convex point or lead to poor performance in an uneven situation. Though this problem can be generated, I would recommend using this model because it is a convenient way to define the dependencies between explanatory and response variables. 
+
+### Smoothing
+
+As I mentioned above, there are three key properties to using GAM: interpretability, flexibility/automation and regularisation [15]. We will discuss smoothing that is relevant to regularisation in the model. 
+
+Smoothing is generally used to prevent overfitting by controlling the smoothness of the smooth function in GAM. The overfitting is prevented by using the penalty term above which is always positive therefore penalising the minimisation of the objective function. There are different ways of smooth functions by dimensions, however, we will focus on the smoothing spline which is fundamental first and it is worth glimpsing the generality of the smoothing term and the way in which to identify the estimators.
+
+Let a set of points $\{x_i, y_i : i = 1, … , n\}$ where $x_i < x_{i+1}$ and typically denote $f(x)$ to represent a smooth function according to the equation (3.2) above.
+
+## Soap-film spatial splines (soap-film) approach
+
+The aim of soap film smoothing is to construct a smooth in 2-dimensional space as a film of soap connecting smoothly complex domains such as regions with holes. Whilst the conventional methods such as cubic splines have bad performances over complicated boundaries, this approach produces a computationally straightforward and efficient and is possible to assume smooth functions from the widely spread noisy data and known boundary data, examined by Simon N. Wood et al in 'Soap film smoothing' [13]. It can suggest a smoothing function in an unknown or complicated shape alongside the boundary as well.
+
+Assume that the boundary of the region $\Omega$ which we are interested in, of the $xy$-plane and the smooth function $f$, allows distorting in the domain $\Omega$. The out-of-plane displacement which is our main interest of loop **B** over the plane gives the values of the known function at the boundary. To apply soap film smoothing, this equation must be satisfied to seek the estimate $h$ which are noisy observations:
+
+\begin{equation}
+\label{eqn:soap_1}
+h(x_k, y_k) = \sum_i \{z_i-f(x_i, y_i)\}^2 + \lambda J_\Omega(f)
+\end{equation}
+
+where $J_\Omega(f) = \int_\Omega (\frac{\partial^2f}{\partial x^2} + \frac{\partial^2f}{\partial y^2})^2dxdy$ to measure the degree of distortion [13]. In other words, $J_\Omega(f)$ is represented by the derivatives in the penalty term. It is expressed through a singularity point, $x_k, y_k$ in the boundary and we can minimise $J_Omega(f)$. Handling singularity is important to find the basis function under the Poisson equation which is   
+
+\begin{equation}
+\label{eqn:soap_2}
+\frac{\partial^2 f}{\partial x^2} + \frac{\partial^2 f}{\partial y^2} = \rho
+\end{equation}
+
+where
+
+\begin{equation}
+\label{eqn:soap_3}
+\frac{\partial^2 \rho}{\partial x^2} + \frac{\partial^2 \rho}{\partial y^2} = 0
+\end{equation}
+
+with respect to the Laplace equation. Second-derivative vectors of $f$ will be denoted by $f_{xx}$ and $f_{yy}$ with respect to $x$ and $y$ respectively. Since our project is slightly relevant to physics, the Laplace and Poisson equations will be well studied methods in the partial differential equations (PDEs). Finding the basis function $\rho_k(x, y)$ is an important issue to deal with the singularity with the solution of the Laplace equation. When the correlation coefficient is equal to 1 or -1, which has a completely linear relationship under multicollinearity. The determinant will be 0 and that means the matrix is singular which can not be invertible. As can be seen above, this equation looks much similar to simple GAMs and we can see it is expanded to soap film smoothing. 
+
+
+In our project, we do not have special knowledge about the value of the boundary, because the corrected coordinates will be used and some data points are missing or removed as outliers. Based on this information, we will more focus on the problem with an unknown boundary. When the boundary is unknown, the penalty is desirable to be zero. If not, the smooth causes the sort of boundary leakage problems we want to avoid. To get more idea of soap film smoothing with unknown boundaries, we need to define the boundary function $f_b(r) = f\{x_B(r), y_B(r)\}$ using cyclic penalised regression spline smoother $r$ on loop **B**.
+
+The basis function with this smoother is like that, 
+
+\begin{equation}
+\label{eqn:soap_4}
+f_b(r) = \sum_{j=1}^J \alpha_j \delta_j(r)
+\end{equation}
+
+where $\alpha_j$ are parameters and the known basis functions are $\delta_j(r)$. In terms of the penalty in statistics, it is beneficial to converge to the solution of the original constrained problem to be an alternative to an unconstrained problem. Using the basis function and penalty for the boundary model, the solution will be $a_j(x, y)$ to satisfy the Laplace equation and the boundary condition set by $\alpha_i$ = 0, for all $i \ne j$ and $\alpha_j$ = 1. Therefore we can get the solution $a(x, y) = \sum_{j=1}^J \alpha_j a_j (x, y)$ for quadratic penalty forcing boundary smoothness. 
+
+The main characteristic of soap film smoothing is to offer a well-performed alternative over complex boundaries such as a peninsula or a specimen with a centred hole. I will implement this method in practice below and all analyses will be carried out using R. As mentioned above, with a generalised additive model, the data will be applied by \texttt{mgcv} package. 
+
+
+
+
+## Spatial models based stochastic partial differential equations (SPDE) approach
+
+With the complex boundary condition and the hole, we need to adopt a new model rather than the simple stationary model using the shortest Euclidean distance between two points, as described in section 1.2. Unlike the soap film smoothing, the new model, called the barrier model here, is based on the Matérn correlation to manipulate the spatial dependency and so that, stochastic spatial differential equation (SPDE) is used to well behave with the model [14]. Therefore, we examine this method as an alternative application to the soap film smoother described above.
+
+The conventional methods, whilst they may be sufficient to explain the variabilities between the observations in the study area without any physical barrier, are not appropriate in the complicated area, e.g. around the hole or peninsulas, inlets and islands of many different sizes [14]. Thus, we implement the SPDE approach to mitigate variabilities with the spatial Gaussian field as a random effect in an unknown boundary [15] as many researchers have utilised spatial Gaussian fields(SGFs) to build spatial or spatio-temporal analysis in many applications. This technique is usually assumed to be stationary and isotropic because it is not realistic if the map changes the data points when it rotates or moves [14]. Stationary means that the element of the model does not change if the map is moved and when the underlying map is rotated, we will call the model component follows isotropic, likewise. For convenience, we will tell stationary if the model satisfies stationary and isotropic. 
+
+The main limitation of this approach is that defining the boundary would vary depending on the researchers since they are likely to use different approximations. Accordingly, the interpretations of results and predictions would be different and it may be fatal about the creditability. Nevertheless, the non-stationary model is relatively efficient computationally and user-friendly by using the Bayesian inference and can be applied to the boundary with lots of uncertainties. 
+
+Firstly, a stochastic spatial differential equation is defined to solve the problem using SGFs for assuming by the Gaussian probability density function. Moreover, the Matérn field is widely used to model for the SGF which is a continuous indexed random variable in a Gaussian random field $R^n$ that is a finite 2-dimensional area according to the ‘Non-stationary Gaussian models with physical barriers’ published by Bakka H et al [14]. Even though we need to tune some parameters to determine the Matérn field, this field is able to reduce the dimension of the model if the land doesn't exist. In other words, the intercept is necessary and may be the only variable for the SGF if there are no appropriate covariates in this approach. Note that $d$ is the distance between two random points in the specimen and the covariance function on the Matérn field will be shown below:  
+\begin{equation}
+\label{eqn:spde_1}
+C(d) = \sigma_u^2 \frac{d\sqrt{8}}{r}K_1 (\frac {\sqrt 8}{r})
+\end{equation}
+
+where $\sigma_u$ is the marginal standard deviation of the model component $u$ as a constant and the modified Bessel function is the $K_1$.  if the correlation coefficient $r$ is near 0.1, it is interpretable to get the relatively shortest distance between two arbitrary points [14]. It means that the distance can be the shortest Euclidean distance or a new indirect shortest distance along the hole based on the locations of two points. 
+
+```{r, echo=FALSE, fig.cap="The data visualisation for Ramsay’s horseshoe and the Barrier model together with triangular mesh of the domain (left)", fig.align='center'}
+img1 <-  rasterGrob(as.raster(readPNG("../images/ramsay_1.png")), interpolate = FALSE)
+img2 <-  rasterGrob(as.raster(readPNG("../images/ramsay_2.png")), interpolate = FALSE)
+grid.arrange(img1, img2, ncol = 2)
+```
+
+The interesting point is that mesh is established to apply to this approach. It is important that the points that define the mesh can be predetermined independent of data observation but can also be the locations of observed data. According to the left diagram above, we determine our study area consisted of the mesh. The mesh was extended beyond the study area which is called a buffer zone and made it convex to avoid artefacts and unreasonable issues when the barrier moves away from the data to mitigate the impact of the boundary [14]. To emphasize the robustness of the barrier model, we need to investigate the stationary model as well. It is called a stationary model when we determine the dependency using the shortest path between two points that basically ignored the hole [15]. Accordingly, we have assumed to be stronger if the point from the other is close to each other typically. To be specific, a stochastic partial equation in a stationary model in the whole study area $\Omega$ for $u(s)$ which is displacements as function of spatial points, we are interested in is [14]: 
+
+\begin{equation}
+\label{eqn:spde_2}
+u(s) -  \nabla \cdot \frac {r^2} {8} \nabla u(s) = r\sqrt{\frac{\pi}{2}}\sigma_u W(s)
+\end{equation}
+
+where $r$ and $\sigma_u$ are the same constants as in the covariance equation above. Note that $\nabla = (\frac{\partial}{\partial x},\frac{\partial}{\partial y})$ and $W(s)$ is white noise.
+
+
+Unlike the stationary model, the dependency between two points with the physical barrier is measured along the margin like the right figure in (3.1). For example, we will not consider the dependency between one in the red part and the other in the blue area even if the Euclidean distance between them is the shortest. Consequently, a barrier model, which provides a non-stationary Gaussian random field, has different correlation function values depending on the location of the points within the boundary. 
+
+Despite many differences from the stationary model,  the barrier SGF has the same $\sigma$, a range close to 0 to remove the correlation [14]. The key difference from the stationary model is that the model will be applied to the normal area $\Omega_n$ and the physical barrier $\Omega_b$, separately. The barrier SGF $u(s)$ is described below: 
+
+\begin{equation}
+\label{eqn:spde_3}
+u(s) - \nabla \cdot \frac{r^2}{8}\nabla u(s) = r\sqrt{\frac{\pi}{2}}\sigma_u W(s) \quad\textrm{for}\quad s \in \Omega_n
+\end{equation}
+
+\begin{equation}
+\label{eqn:spde_4}
+u(s) - \nabla \cdot \frac{r_b^2}{8}\nabla u(s) = r_b\sqrt{\frac{\pi}{2}}\sigma_u W(s) \quad\textrm{for}\quad s \in \Omega_b
+\end{equation}
+
+To summarise this technique, the importance of a well-defined mesh is vital to solving the SPDE in a finite field. After that, we will use the spatially varying standard deviation when solving the above formulas as the marginal standard deviation of the Gaussian random field in a location $s$ [14]. In terms of the weak form re-interpreted, the left side to treat the joint distribution over j is equal to the right side of the inner product of the distribution. 
+
+\begin{equation}
+\label{eqn:spde_5}
+<\psi_j(\cdot), [1-\nabla\frac{r(\cdot)^2}{8}\nabla]\tilde u(\cdot)> = <\psi_j(\cdot), r(\cdot)\sqrt\frac{\pi}{2}W(\cdot)>
+\end{equation}
+
+where $\psi_j(s)$ are the linear finite element on each mesh which takes the value 1 in the mesh $i$, otherwise, it will take 0 in others. Note that $\tilde u(s)$ is spatial field approximation and represented by $\sum_{i=1}^n u_i\psi_i(s)$ where n is the number of basis function for each mesh node $i$. $\tilde u_i$, the Gaussian random variables, are used to compute this approximation with matrix $\boldsymbol Q$ that is the sparse precision matrix for the coefficients [14].
+
+For the model of the stationary and barrier model, we will apply a hierarchical Bayesian model to mitigate uncertainty because it is likely to simulate the posterior distribution more precisely by using the prior. If many data points along the boundary, the stationary reconstruction seems more reasonable. Nevertheless, the barrier model is realistic if the locations are randomly sampled and Gaussian noise, $\sigma_\epsilon$, was added to the data. To highlight the result of the SPDE technique, we will compare it with a stationary model and the soap film smoothing we applied above.
+
+
+## Finite element spatial splines approach
+
+This model has lately been introduced as one of the models that used a partial differential equation(PDE) which is not stochastic for spatial analysis. Similar to the SPDE approach, the spatial spline is also one of the partial differential equations. Accordingly, this model is solved by the partial differential operator over the spatial Gaussian field that includes the Matèrn correlation. The soap film smoothing we mentioned above and the spatial spline regression(SSR) models, on the other hand, have the same advantage of being able to describe the irregular domains with sparse data well, however, the difference is that it is used in a tensor product smoother included the time dimension.
+
+To overcome the limitations which have a concave or an irregular boundary, this technique is proposed as a semi-parametric model that combines parametric and nonparametric components [24]. In other words, we can say a semi-parametric model has finite-dimensional and infinite-dimensional components. Let assumed that there is a set of data points $\{ p_i = (x_i, y_i)\}, I=1,..,n$  on the study area $\Omega \in R^2$. The model is represented below [25]:
+
+\begin{equation}
+\label{eqn:spline_1}
+z_i=\textbf{w}_i^t\beta+f(\textbf p_i)+\epsilon_i, i=1,…,n
+\end{equation}
+
+where $z_i$ is the response variable about the observed data point $p_i$ and a covariate vector is described by $\textbf w_i$. Note that $\epsilon_i$ is called by the Gaussian noise that the distribution of error or residuals are independent with zero mean and $\sigma$ standard deviation. $\beta$ is a coefficient of the model and function f has a real number and is twice differentiable to get maximum/minimum values. 
+
+To minimise the penalised sum of square error function [25], 
+\begin{equation}
+\label{eqn:spline_2}
+J_\lambda(\beta, f)=\sum_{i=1}^n (z_i-\textbf{w}_i^t\beta+f(\textbf p_i)+\lambda\int_\Omega(\Delta f)^2
+\end{equation}
+
+In terms of the Euclidean transformation of the spatial coordinates that preserve the Euclidean distance between two pairs when the figure rotates or moves, we measure the local curvature of $f$ to apply smoothness over $\Omega$ of the square of the Laplacian of $f$ [25], 
+
+\begin{equation}
+\label{eqn:spline_3}
+\Delta f=\frac{\partial^2 f}{\partial x^2}+\frac{\partial^2 f}{\partial y^2}
+\end{equation}
+
+Similar to the SPDE approach above, each triangular mesh has its own basis function named finite element. Including the roughness penalty in the equation (3.13), we can determine the estimates for the spatial field. Although the penalty term looks similar to the soap film smoothing, we can interpret it in different numerical or analytical ways [25]. In other words, we will more focus on the generalisation of more complicated partial differential operators. 
+
+Assume that domain $\Omega_{\tau}$ consists of a set of triangles and $\tau$ means regular triangulation. As can be seen above, the assumption about the number of data points $\textbf{p}_i$ was described as $n$. Let $\textbf{v}_j, j = 1,…,J$ be the vertices of triangles, so that, $\textbf v_i$ is equal to $\textbf p_i$ where $n<=J$ [25]. According to the density of the data, it's naturally tuned as the length of the triangulation. For instance, the length of a side of a triangle is extended if the data is coarse. On the other hand, the side is shrunk when the data is finer. In this paper [25], vertices are also called nodes $\xi_k, k=1,...,K$ when the surface over $\Omega_{\tau}$ is defined as a polynomial in $x$ and $y$. To set the $K$ nodes from basis functions over the boundary $\Omega_\tau$ [25]:
+
+
+\begin{equation}
+\label{eqn:spline_4}
+f(x,y)=\sum_{k=1}^K c_k \psi_k(x,y)\\
+=\sum_{k=1}^K f(\xi_k)\psi_k(x,y)\\
+=\textbf{f}^t \psi(x,y)
+\end{equation}
+
+This basis function based on Lagrangian property is computationally efficient and is the potential to be extended flexibly. 
+
+Through the formula (3.13), we can take into account the boundary condition if the normal derivative of $f$ is 0, but this situation is not generally occurred. That's because the domain boundary is not apparently constructed on the finite field [25]. Therefore, we compute the estimator of $\hat{f}$ to do the integral of the cross-product of basis functions and of their partial derivatives. 
+
+As mentioned above, the estimation of equation (3.13) is the most important to well define the boundary condition for this technique. Among some analysis terminology about boundary, we will use Dirichlet boundary condition which has weighted integral form to hole the fixed points on the study area like soap film smoothing. In other words, an estimate of SSR complied with the boundary conditions including prior information efficiently [25]. 
+
+In this paper [25], we find similarities and differences among the three methods we will use. I will explain the methodologies relevant to our data below. 
+
+<!--chapter:end:01-chap1.Rmd-->
+
+# Methodology and Technical implementation {#Method}
+
+<!-- Required to number equations in HTML files -->
+<script type="text/x-mathjax-config">
+MathJax.Hub.Config({
+  TeX: { equationNumbers: { autoNumber: "AMS" } }
+});
+</script>
+
+Based on the research conducted in the previous chapter, we will take into account the techniques for identifying the dependencies and background to implementing those methodologies with our data. As this analysis has not been done before in the Engineering sector, we discover how to apply the methods in R step by step. 
+
+## Defining the boundary 
+
+Before we apply spatial sophisticated methodologies, we should build the boundary. As the modified coordinates are used, the exact boundary is unknown, and it affects all techniques we will use. 
+
+
+```{r,echo=FALSE, fig.cap="The design of specimen and specific dimensions.", fig.align='center', fig.height=3, fig.width=3}
+img1 <-  rasterGrob(as.raster(readPNG("./images/coupon_dimension.png")), interpolate = FALSE)
+grid.arrange(img1)
+```
+
+According to the paper [11], we first set the shape of the coupon and the size of the hole, respectively and it means we have two boundary loops; one for the external shape and one for the hole.  Since the length is equal to 38mm in accordance with the length in the third figure (4.1), side.lim is set by 19 from the zero point. The height of the main part is 24mm, hence, side.lim will be 12.2 considered by the size of the hole and avoiding the intersection of boundary loops for \texttt{mgcv}. Under the paper [11], as the diameter of the hole is 3.17 as can be seen in the first picture, we will use the radius for consistency. We are close to the boundary, however, there is a potential bias from this assumption that we don't have the exact values from the boundary.  
+
+```{r ,echo= FALSE, fig.cap="Plot on the left hand side is represented by the location of the data that we gained from the experiment. We can see that there is some data missing. While as can be seen on the right side, the imaginary boundary is constructed based on the data since the boundary is not figured out exactly.", fig.align='center', fig.height=4}
+# boundaries construction - modified
+### TO DO maybe extend  top and bottom to avoid boundary effects there!
+up.lim   = 12.2
+# buf.lim  = 18 # limit for the buffer zone
+side.lim = 19
+
+
+# number of points to define the boundary
+npb  <- 30
+npb2 <- 3
+
+yy2 <- seq(-up.lim,up.lim,length.out=npb)
+xx2 <- -35.15+sqrt(20^2-(yy2)^2)
+
+yy3 <- seq(up.lim,-up.lim,length.out=npb)
+xx3 <- 34.85-sqrt(20^2-(yy2)^2)
+
+
+eps<-0.01 # to avoid self in tersection of boundary loops (for mgcv)
+
+l.side.lim=xx2[length(xx2)]+eps
+
+
+xx<-c(xx2,
+      rep(xx2[length(xx2)],npb2),
+      seq(xx2[length(xx2)],side.lim,length.out=npb),
+      rep(side.lim,npb2),
+      xx3,
+      rep(xx3[length(xx3)],npb2),
+      seq(xx3[length(xx3)],l.side.lim,length.out=npb),
+      rep(l.side.lim,npb2))
+
+yy <- c(yy2,
+        seq(up.lim,up.lim+eps,length.out=npb2),
+        rep(up.lim,npb),
+        seq(up.lim,up.lim+eps,length.out=npb2),
+        yy3,
+        seq(-up.lim,-up.lim+eps,length.out=npb2),
+        rep(-up.lim,npb),
+        seq(-up.lim,-up.lim+eps,length.out=npb2))
+
+# outer boundary data frame
+
+fsb<-data.frame(x=xx,y=yy)
+
+
+# lines(fsb$x,fsb$y,col="red")
+# points(fsb$x,fsb$y,col="red",pch=".",cex=3)
+
+centerx <- -0.15 # to revist this later as might not be needed
+
+# radius of the hole (as per paper)
+r=3.17/2
+
+x1 <-  centerx+seq(-r,r-0.001,length.out=npb)
+y1 <- -sqrt(r^2-(x1-centerx)^2)
+ 
+x2 <-  centerx+seq(r,-r,length.out=npb)
+y2 <-  sqrt(r^2-(x2-centerx)^2)
+
+
+
+
+# hole data frame
+fsb.hole   <- data.frame(x=c(x1,x2),y=c(y1,y2))
+
+boundary.list=list(as.list(fsb),as.list(fsb.hole))
+
+
+par(mfrow=c(1,2))
+plot(dic_125$corrX,dic_125$corrY,
+     pch=".",
+     main="Locations of the data \nfrom the experiment",
+     ylab="corrY", xlab="corrX") 
+lines(c(x1,x2),c(y1,y2),col="red")
+
+
+plot(fsb,pch='.',cex=3,
+     main = "Construction for the boundary", 
+     ylab = "corrY", xlab="corrX", ylim=c(-20, 20))
+points(fsb.hole,pch='.',cex=3)
+lines(fsb)
+lines(fsb.hole)
+```
+
+
+
+
+```{r sampling, echo= FALSE}
+sample.out <-rep(FALSE,nrow(dic_110))
+sample.out[sample(1:nrow(dic_110), size=15000)]  <- T 
+
+## data sampling - trained: nearly 50% / validation data
+dic_test_110 <-dic_110 %>% 
+  select(corrX,corrY,corrW) %>% 
+  filter(sample.out)%>% 
+              rename(x=corrX,y=corrY)
+
+dic_val_110 <-dic_110 %>% 
+  select(corrX,corrY,corrW) %>% 
+  filter(!sample.out)%>% 
+              rename(x=corrX,y=corrY)
+
+sample.out <-rep(FALSE,nrow(dic_115))
+sample.out[sample(1:nrow(dic_115), size=15000)]  <- T 
+
+## data sampling - trained: nearly 50% / validation data
+dic_test_115 <-dic_115 %>% 
+  select(corrX,corrY,corrW) %>% 
+  filter(sample.out)%>% 
+              rename(x=corrX,y=corrY)
+
+dic_val_115 <-dic_115 %>% 
+  select(corrX,corrY,corrW) %>% 
+  filter(!sample.out)%>% 
+              rename(x=corrX,y=corrY)
+
+sample.out <-rep(FALSE,nrow(dic_120))
+sample.out[sample(1:nrow(dic_120), size=15000)]  <- T 
+
+## data sampling - trained: nearly 50% / validation data
+dic_test_120 <-dic_120 %>% 
+  select(corrX,corrY,corrW) %>% 
+  filter(sample.out)%>% 
+              rename(x=corrX,y=corrY)
+
+dic_val_120 <-dic_120 %>% 
+  select(corrX,corrY,corrW) %>% 
+  filter(!sample.out)%>% 
+              rename(x=corrX,y=corrY)
+
+sample.out <-rep(FALSE,nrow(dic_125))
+sample.out[sample(1:nrow(dic_125), size=15000)]  <- T 
+
+## data sampling - trained: nearly 50% / validation data
+# nrow(dic_125)
+dic_test_125 <-dic_125 %>% 
+  select(corrX,corrY,corrW) %>% 
+  filter(sample.out)%>% 
+              rename(x=corrX,y=corrY)
+
+dic_val_125 <-dic_125 %>% 
+  select(corrX,corrY,corrW) %>% 
+  filter(!sample.out)%>% 
+              rename(x=corrX,y=corrY)
+
+sample.out <-rep(FALSE,nrow(dic_130))
+sample.out[sample(1:nrow(dic_130), size=15000)]  <- T 
+
+dic_test_130 <-dic_130 %>% 
+  select(corrX,corrY,corrW) %>% 
+  filter(sample.out)%>% 
+              rename(x=corrX,y=corrY)
+
+dic_val_130 <-dic_130 %>% 
+  select(corrX,corrY,corrW) %>% 
+  filter(!sample.out)%>% 
+              rename(x=corrX,y=corrY)
+```
+
+We will simulate the predictions and spatial dependencies between data points over the domain we set. To assess and train the data, the set of data will be divided into training data and test data to validate the prediction. Although, in machine learning, 70% of the data will typically be training data and test data will be 30% of the whole, we split nearly 50% each into training and validation data in our project. Even though each data set has a different size, so we cannot guarantee the exact percentage, we extract 15000 data points to be trained. 
+
+## Technical implementation of the approaches
+
+Because the boundary has specifically a hole, we need to implement the newly invented methods for the complicated boundary. In this section, we will investigate which packages we should use in R, how to set the parameters and the evidence for those applications. 
+
+### Soap film smoothing approach
+
+```{r knots, echo= FALSE}
+## create some internal knots...
+# knots buffer length = kbl = 1
+# this is to avoid having knots lying in the boundary
+
+kbl<-0.5
+
+res_grid<-20 # resolution of the knots in each dimension
+
+
+knots.grid<- 
+  expand.grid(x=seq(-side.lim + kbl,
+                     side.lim - kbl,
+                    length.out = res_grid),
+              y=seq(-up.lim + kbl,
+                     up.lim - kbl,
+                    length.out = res_grid))
+knots.grid <-
+  knots.grid %>%
+  filter((x-centerx)^2+y^2>r^2,
+         x>-35.15+sqrt(20^2-(y)^2)+kbl,
+         x< 34.85-sqrt(20^2-(y)^2)-kbl)
+
+# removes points in grid that do not belong to the domain?
+
+
+# points(knots.grid,pch='.',col="red",cex=3)
+# points(dic_test_110$x,dic_test_110$y,pch=".");
+
+
+# k is the basis dimension for each boundary loop smooth.
+# xt$bnd is the boundary specification for the smooth.
+# 'knots' are the locations of the interior knots for the smooth.
+
+# the dimension of the PDE solution grid can be controlled via element `nmax` (default 200) of the list supplied as argument xt of s in a gam formula: it gives the number of cells to use on the longest grid side.
+
+nmax=150
+# try to leave as it is, only reduce if computation time is too long
+# oddly if 'nmax' is too small then some knots seem to fall outside boundary
+
+# the basis dimensions for each boundary loop smooth.
+k1<-50  # outer boundary
+k2<- 20 # hole boundary  
+
+# k1, k2 are roughly bounded by the number of points in each boundary ( see below)
+
+# length(boundary.list[[1]]$x)
+# length(boundary.list[[2]]$x)  
+
+# do not worry now too much about the specification of nmax, k1 and k2! When you understand the theory it will be easier to understand these parameters
+
+  
+# note 'boundary.list' is a list of two elements since we have 2 boundary loops
+```
+
+
+There are two main parts of soap film smoothing with the domains which are not convex. As our domain has a centred hole in the specimen, this approach is fitted well over the complex boundaries, unlike the conventional models. The first part of this technique is to use generalised additive models described in the literature review, using the appropriate R package. To specify this model, I use the \texttt{gam} function and "bs" option which specifies the type of basis in the \texttt{mgcv} package. The second part is the boundary described above. This methodology is more concentrated on spatial analysis, it is crucial to set a well-defined boundary as well as modelling. 
+
+In order to construct soap film smoother in this project,
+
+- Defining the boundary of the specimen and the hole which is centrally located.
+- Modelling with a generalised additive model
+- A number of internal knots in the partial differential equation(PDE) solution grid within the study area. Obviously, It is computationally efficient when K is small which determines the effective degree of freedom of the soap film as I mentioned for equation (3.3) in the literature review above. The degree of freedom is related to the fitting of the model. Thus, it is an issue to find the proper number of K to find how many basis functions are and how to solve the problem of PDEs. Because of the less computational cost and speed, we take a random sample size of 15,000 locations out of more than 30,000 so this plot below looks different from the other above in the figure (4.1)
+
+```{r fig.cap="This plot represents the boundary of the specimen and internal knots for the soap film smoother. The data points outside the grid are removed.", fig.height=4}
+par(mfrow=c(1,1))
+## plot boundary with knot and data locations
+plot(boundary.list[[1]]$x,boundary.list[[1]]$y,type="l", xlab="x", ylab="y");
+
+lines(boundary.list[[2]]$x,boundary.list[[2]]$y);
+
+points(knots.grid,pch='.',col="red",cex=3)
+points(dic_test_125$x,dic_test_125$y,pch=".");
+title(main="boundary plot with knot and data locations")
+```
+
+Before applying the method, we need to notice there are two boundary loops for the outside of the study area and the hole and will refer to $B_1$ and $B_2$, respectively. Let $k_1$ and $k_2$ be roughly bounded by the number of points in each boundary and they represent 50, and 20, because it is recommended to use less than half of the initial number of data points which are 132 and 60, respectively. In other words, we only use a small number of points in the boundary for computational speed. Then, we should define the grid and the number of internal knots. We've plotted a rectangular grid to assess the basis functions determined by partial differential equations for computational advantage. With respect to the number of internal knots, we put 20 knots in each dimension due to the efficiency computationally as well. The dimension of the PDE solution grid can be further controlled via element `nmax` (default 200) of the list supplied as argument 'xt' of $s$ in a gam formula: it gives the number of cells to use on the longest grid side. 'nmax' which is the smoothing parameter, is relevant to the computational efficiency under the modest size of $k_1$ and $k_2$ which are the basis dimension for each boundary loop smooth in the GAM function. When nmax = 150, it makes reducing the time since our study area is not too huge. Likewise, these parameters $k_1$ and $k_2$ set the maximum value for the degree of freedom, they are not generally critical. Moreover, the value is equal to 0 when the data points lie on the boundary, we need buffers to avoid this circumstance. In our case, that's because we have a hole in the centre of the specimen, points are removed that do not belong within the boundary in the solution grid and internal knots for soap film smoother are identified. The \texttt{mgcv} command uses to fit the model is given below:
+
+  
+```{r soap_modelling, echo= FALSE}
+# note we use "cp" for the smoother in the boundary, to obtain a cyclic p-spline of order m=2 (eg cubic). We need it to be cyclic since the boundary is a closed loop and we want the value of the objective function at the boundary, at the start and at the end, to be the same.
+
+# we do not need to use "sf" or "sw" now, maybe later when we include ''load' as a third variable apart from the cordinates 'x' and 'y'
+b_110 <- gam(corrW~s(x,y,
+                 k=c(k1,k2),#basis dimensions for both boundaries
+                 bs="so", # this specifies is a soap film
+                 xt=list(bnd=boundary.list,
+                         bndSpec=list(bs="cp",m=2),
+                         nmax=nmax)),
+         knots=knots.grid,
+         data=dic_test_110)
+
+b_115 <- gam(corrW~s(x,y,
+                 k=c(k1,k2),#basis dimensions for both boundaries
+                 bs="so", # this specifies is a soap film
+                 xt=list(bnd=boundary.list,
+                         bndSpec=list(bs="cp",m=2),
+                         nmax=nmax)),
+         knots=knots.grid,
+         data=dic_test_115)
+
+b_120 <- gam(corrW~s(x,y,
+                 k=c(k1,k2),#basis dimensions for both boundaries
+                 bs="so", # this specifies is a soap film
+                 xt=list(bnd=boundary.list,
+                         bndSpec=list(bs="cp",m=2),
+                         nmax=nmax)),
+         knots=knots.grid,
+         data=dic_test_120)
+
+b_125 <- gam(corrW~s(x,y,
+                 k=c(k1,k2),#basis dimensions for both boundaries
+                 bs="so", # this specifies is a soap film
+                 xt=list(bnd=boundary.list,
+                         bndSpec=list(bs="cp",m=2),
+                         nmax=nmax)),
+         knots=knots.grid,
+         data=dic_test_125)
+
+b_130 <- gam(corrW~s(x,y,
+                 k=c(k1,k2),#basis dimensions for both boundaries
+                 bs="so", # this specifies is a soap film
+                 xt=list(bnd=boundary.list,
+                         bndSpec=list(bs="cp",m=2),
+                         nmax=nmax)),
+         knots=knots.grid,
+         data=dic_test_130)
+```
+
+\begin{verbatim}
+gam(corrW~s(x,y,
+            k=c(k1,k2), # basis dimensions for both boundaries
+            bs="so",    # this specifies is a soap film basis
+            xt=list(bnd=boundary.list, # boundary points
+                    bndSpec=list(bs="cp",m=2), # boundary basis
+                    nmax=nmax)),
+            knots=knots.grid, # knots points
+            data=dic_test)
+\end{verbatim}
+
+To fit a GAM with soap film smoothing, I will describe the model that illustrates the observed displacement, in addition to the corrected $x$ and $y$ coordinates as smooth terms with the test data over each loading level. Even though this model takes a bit longer to run than one with traditional smoothing, we can reduce the time as can as possible by controlling the number of knots in the 'knots = knots.grid' argument. To specify the soap film smoother, the argument 'bs="so" is used as constructed above and the list of border coordinates in the 'xt = list(bnd=boundary.list, bndSpec=list(bs="cp",m=2), nmax=nmax))' is determined. Note that the smoother over the boundary is illustrated using the 'bs="cp" argument to obtain a cyclic p-spline of order m = 2 (eg. cubic) since assumed the boundary is unknown. As the boundary is a closed loop and the value of the objective function at the boundary at the start and end, respectively should be the same, we need this argument to be cyclic. For the basis dimensions for both boundaries, we put a constraint 'k=c(k1, k2)' to fit the spatial field and reduce the runtime. The exact modelling of soap film smoothing in R can be found in listing 4.1 above and its code for the project analysis is uploaded in the GitHub link.
+
+
+
+
+As explained in the literature review of section 3, the estimation method used to fit the soap film smoother is a minimising problem so is a frequentist classical approach of inference. The SPDE method described next uses a Bayesian approach. To get the answers from SPDE and spatial spline regression models using the partial differential equation, we have to know about Bayesian inference to estimate posterior distribution under prior information. This method seems similar to the Bayesian Theorem, however, this technique is more flexible with respect to the uncertainties. 
+
+
+#### Bayesian Inference
+
+For stochastic partial differential equation(SPDE) and Finite element spatial splines approaches with scattered data, we predict the posterior distribution under the prior, so that we need to research the Bayesian inference. Since the 1950s, the interest in these methods has increased because these methods are able to predict the values when the data is missing or unobserved [19]. Since we used the corrected coordinates and we could not define our boundary exactly, there are some issues like uncertainty. To deal with them, we will focus on Bayesian methods to take into account the uncertainty to predict and estimate the undetermined parameters. Also, we will estimate the posterior distribution using prior predictions under the Bayesian inference. 
+
+In certain situations with well-defined observations, we apply the Bayesian theorem with a conditional probability. Unlike the Bayesian theorem, the main difference of Bayesian inference is that the data is not well-established and there is a lot of uncertainty. Therefore, we will obtain the posterior distribution based on prior which specifies the parameters or quantities.
+
+Let $\Omega$ be the sample space and $Y$ be a random variable which contains variability in the model. 
+
+$$
+L(\theta) = p(Y = y|\theta)
+$$
+
+Where $p(\cdot)$ is a density function as our data is continuous and $\theta$ is a parameter in the model. In this thesis, our goal is to define the spatial dependency between the displacements, so that we will refer to the posterior distribution $p(\theta|\psi)$ [19]. Given the two components of probability density distribution and the Bayesian theorem, It is denoted below:
+
+$$
+p(\theta|\psi) = \frac{p(\psi|\theta) * p(\theta)}{p(\phi)}
+$$
+
+In terms of $p(y)$, we can consider the constant value since this represented the marginal distribution of the data and it does not depend on $\theta$ [19]. Therefore we can re-determine the posterior distribution proportionally below: 
+
+$$
+p(\theta | \psi) \propto p(\psi|\theta) * p(\theta)
+$$
+
+The main property is conjugacy in that the posterior holds the same family as the prior distribution in the Bayesian term [19]. In other words, the prior is conjugated to the likelihood of posterior distribution. Even though this characteristic is convenient, this feature provides limited flexibility in reality so it is not often used. Using the posterior, we can assess the association between predictors and outcomes. It means that we can predict the data using Bayesian inference to simulate the appropriate methods such as INLA on R. 
+
+It is impossible to estimate the posterior distribution statistically if the conjugacy is not reasonable. In this case, we should generate the values from the posterior distribution to apply a simulation-based method such as the integrated nested Laplace approximation(INLA) approach. The pros of this approach are to reduce the computing time compared to MCMC and to understand easily with Gaussian models. According to the additive model (3.1) we defined above, $f_i$ is a collection of different forms. For example, it was a smooth function when we performed the soap film smoothing and will be spatial random effects for SPDE. As can be seen, this additive model with Gaussian is flexible and well accommodate with spatial or spatio-temporal models. 
+
+To adopt the INLA approach, a response variable $y = (y_1, …, y_n)$ are assumed the independent and normally distributed. $\mu$ and $\psi$ are denoted by the mean and $1/\sigma^2$ of observations, respectively.
+
+$$
+\mu \sim Normal(\mu_0, \sigma_0^2), \quad\\
+\psi \sim Gamma(a, b)
+$$
+
+where $Normal(\mu_0, \sigma_0^2)$ for $\mu$ and $Gamma(a, b)$ for $\psi$ are a prior distribution  in the INLA approach [19]. In other words, we can compute the posterior distribution of the hyperparameter $\psi$ below:
+
+$$
+p(\psi|y) = \frac{p(\theta, \psi|y)}{p(\theta|\psi,y)} \\
+\propto \frac{p(y|\theta, \psi)p(\theta)p(\psi)}{p(\theta|\psi, y)} \\
+\propto \int p(\theta, \psi|y)d\theta
+$$
+
+When the denominator and the numerator are not dependent on $\theta$, they are cancelled out, therefore, these equations represent the proportional relations. By researching the Bayesian inference, I understand the process to estimate the posterior and the way to solve the stochastic partial differential equations. Even though we do not calculate each probability for the posterior distribution, we will use several arguments in R-INLA to implement spatial dependencies between arbitrary observations. 
+
+
+### Spatial models based Stochastic partial differential equations (SPDE) approach
+
+
+Whilst we have to develop the GAM with the soap film smoothing using \texttt{mgcv} package, SPDE method is implemented with GAM in \texttt{INLA} and the statistical model is shown below:
+
+$$ 
+\textrm{observed displacement} = \alpha+f(x,y)+error
+$$
+where 
+
+* $\alpha$ is the intercept. It is represented  the mean displacement.
+
+* $(x,y)$ is the (continuous) position coordinate in 2-dimensional space
+
+* $f(x,y)$ is a smooth (continuous and differentiable) function in the domain (in our case is modeling the displacement as a function of the points in the domain). This is assumed to be unknown and therefore modeled as a random function. By construction has overall (all the domain) mean zero. Random functions are complicated and here we will only say that we use a specific type of random function called a Gaussian process. A gaussian process is determined by its mean function over the domain (here is zero) and its covariance function. The covariance function  is defined as $Cov(f(x,y),f(x',y'))$ where $(x,y)$ and $(x',y')$ are two points in the domain. When the process is stationary and isotropic we have that the above covariance matrix only depends on the distance between the two points  $(x,y)$ and $(x',y')$ but not on the specific pair of points.
+
+
+* Domain: define formally here but for is 2-dimensional and given in the picture with the hole.
+
+* Error is the random (statistical) error which we assume as usual $N(0,\sigma^2)$. This is usually measurement error or repeatability error.
+
+
+#### Generation of mesh
+
+```{r gen_fuc, echo=FALSE}
+AddHoleToPolygon <-function(poly,hole){
+    # invert the coordinates for Polygons to flag it as a hole
+    coordsHole <-  hole@polygons[[1]]@Polygons[[1]]@coords
+    newHole <- Polygon(coordsHole,hole=TRUE)
+
+    # punch the hole in the main poly
+    listPol <- poly@polygons[[1]]@Polygons
+    listPol[[length(listPol)+1]] <- newHole
+    punch <- Polygons(listPol,poly@polygons[[1]]@ID)
+
+    # make the polygon a SpatialPolygonsDataFrame as the entry
+    new <- SpatialPolygons(list(punch),proj4string=poly@proj4string)
+    
+
+    return(new)
+}
+```
+
+Like the soap film smoothing, we generate the mesh where it is the barrier, i.e., the study area for the models using stochastic partial differential equations. Generally, the barrier region is represented by a polygon to apply a barrier model [16]. For this reason, we do not need to consider whether the boundary of the specimen is known or not, unlike the model with soap film smoothing. To simplify the construction of the boundary with a hole, we will use the function 'AddHoleToPolygon'.
+
+```{r gen_polygon, echo=FALSE}
+p = Polygon(cbind(fsb$x, fsb$y))
+p = Polygons(list(p), ID = "none")
+poly.boundary = SpatialPolygons(list(p))
+
+h = Polygon(cbind(fsb.hole$x, fsb.hole$y))
+h = Polygons(list(h), ID = "none")
+poly.hole = SpatialPolygons(list(h))
+
+
+poly.boundary <-AddHoleToPolygon(poly.boundary,poly.hole)
+
+seg.boundary <-inla.sp2segment(poly.boundary)
+
+max.edge = 1
+bound.outer = 10
+cutoff = 0.2
+
+mesh = inla.mesh.2d(boundary = seg.boundary,
+                    max.edge = c(1,2)*max.edge,
+                    cutoff = cutoff,
+                    offset = c(max.edge,bound.outer)
+                   )
+inla.mesh.2d(boundary = seg.boundary,
+                    max.edge = c(1,2)*max.edge,
+                    cutoff = cutoff,
+                    offset = c(max.edge,bound.outer)
+                   )
+# 'offset' defines how much the domain is extended into a buffer are
+# 'max.edge' is the largest allowed triangle edge length
+# second entry in 'max.edge' is for buffer area 
+# 'cutoff' is used to avoid building too many small triangles around clustered data.
+```
+
+```{r, echo=FALSE, fig.cap="In the SPDE approach, we need a boundary with a buffer zone to construct triangulation."}
+par(mfrow=c(1,1))
+plot(mesh, lwd=0.5,main="")
+axis(1)
+axis(2)
+title("Mesh")
+```
+
+In our data, we set an outside barrier of coupon 'p' and the boundary of the hole 'h', respectively. By expanding the study area, we can build a finer mesh where we are interested [17]. Therefore, the generated mesh region is [-30, 30] * [-20,20] and the real study area is  [-20, 20] * [-12.2,12.2] where we set the same boundary as the soap film smoothing. 'max.edge' is the largest allowed triangle edge length. In other words, 'max.edge = c(1,2)*max.edge' means the maximum lengths are 1 inside the boundary, and 2 outside the barrier as we put 1 in max.edge to make the size of triangles differently. If the value is too small, the computation costs get higher. 'offset' defines how much the domain is extended into a buffer area. As we define the 'bound.outer = 10' which is the gap between the length of the mesh region and the real study area, the range of the offset is from max.edge to bound.outer. If the data is near the border, a problem 'edge-effect' can occur. Therefore, it needs an extra section, a buffer zone. Lastly, 'cutoff' is used to avoid building too many small triangles around clustered data. More triangles denote larger computation times, we avoid making too many triangles. The reason we used the triangles to set up the mesh is that each triangle was made up of simple functions and accommodated well even though the barrier has a curve.
+
+ 
+
+
+#### Stationary model
+
+```{r stationary, echo=FALSE}
+# prior knowledge about the correlation range and the standard deviation
+# correlation length is the distance (in 2dimension) at which the correlation is zero
+prior.range = c(10, .5) # mean and std of distance (length of the non-neglible correlation)
+prior.sigma = c(0.05, 0.01) # mean and std dev of the std dev of the displacement
+# preprocessing command
+spde = inla.spde2.pcmatern(mesh=mesh, 
+                           prior.range=prior.range,
+                           prior.sigma=prior.sigma)
+
+formula.stationary <- y ~ -1 + intercept + f(s,model=spde)
+spat.index<-inla.spde.make.index(name="s",n.spde = spde$n.spde)
+```
+
+To be detailed, observed displacement, $Y_i$ has symmetric dispersion after manipulation which can be modelled as a Gaussian distribution. The linear predictor consists of the linear combination of unknown parameters to predict displacement in spatial models based on stochastic partial differential equations(thus, "SPDE"). Therefore, we assume that the canonical link for this distribution in our study is the identity function [18].
+
+Using Bayesian inference, INLA makes the computation fast and accurate model fitting. To compare the effects of stationary and barrier models, we should first build the stationary models, which is a traditional way.  Here, we set the prior knowledge about the correlation range and the standard deviation to deal with variance. It approximates the length of correlation between two arbitrary points in the specimen as the distance in 2-dimensional at which the correlation is zero. According to the variable 'prior.range', the mean value of the distance is 10 and the standard deviation is 0.5, respectively. It demonstrate that we only consider the distance when $|P_{tA}- P_{tB}| <1$ where $P_{tA}, P_{tB}$ are random data points in the study area. On the other hand, prior.sigma estimates the mean and standard deviation of the standard deviation of displacements which are 0.05, and 0.01 each. Those variables are continuous and need to measure correlation and continuity in 2-d data.
+ Furthermore, those figures that we want to define the probability of the spatial effect below 10 as 0.5. 
+The probability of variation in the spatial effect is 0.01 when the variation is larger than 0.05 [20]. 
+
+This spatial model presumed a jointly multivariate Gaussian model with the Matern field [14]. To construct the Matern field on a mesh, we use this argument ‘inla.spde2.pcmatern'.  In our thesis, we use the PC prior which refers to the penalised complexity prior for the Gaussian $\sigma_\epsilon$. The definition of this prior is to penalise departure from a base model. Accordingly, the crucial pros are the PC priors are defined using probability statements about the parameters if they are on the appropriate scale [21]. 
+
+$$
+formula.stationary \leftarrow y  \sim \textrm{-1 + intercept +} f(s,model=spde)
+$$
+
+where $s$ in $f$ is shown the independent variable. In this model, we exclude the intercept, and instead, modify the data stack to be used as an intercept value. 
+
+
+We can translate the model in a statistical notation below:
+
+$$
+Y_i = \beta_0 + \psi (s_i)
+$$
+
+where $\beta_0$ is the intercept and $\phi (s_i)$ represents a Gaussian field which follows $N(0, \sum)$. Note that $\sum$ is a covariance matrix derived by a spatial correlation function [18]. 
+
+
+```{r stacking, echo=FALSE}
+# Stacking
+# A is a sparse matrix with 'n' rows where n is the length of the data and columns equal to 'c' the number of nodes in the triangulations
+
+# A matrix connects the observations $y_i$ (at locations $s_i$) to the mesh nodes 
+
+# the vector expression is s=Aw where w is a vector of dimension 'c' 
+A_110 = inla.spde.make.A(mesh, 
+                         loc=cbind(dic_test_110$x, dic_test_110$y))
+A_115 = inla.spde.make.A(mesh, 
+                         loc=cbind(dic_test_115$x, dic_test_115$y))
+A_120 = inla.spde.make.A(mesh, 
+                         loc=cbind(dic_test_120$x, dic_test_120$y))
+A_125 = inla.spde.make.A(mesh, 
+                         loc=cbind(dic_test_125$x, dic_test_125$y))
+A_130 = inla.spde.make.A(mesh, 
+                         loc=cbind(dic_test_130$x, dic_test_130$y))
+
+# preprocessing
+stk0_110 = inla.stack(data = list(y=dic_test_110$corrW),
+                      A=list(A_110,1),
+                      effects=list(spat.index,
+                              list(intercept=rep(1,nrow(dic_test_110)))),
+                      remove.unused = F,
+                      tag='est0_110') 
+stk0_115 = inla.stack(data = list(y=dic_test_115$corrW),
+                      A=list(A_115,1),
+                      effects=list(spat.index,
+                              list(intercept=rep(1,nrow(dic_test_115)))),
+                      remove.unused = F,
+                      tag='est0_115') 
+stk0_120 = inla.stack(data = list(y=dic_test_120$corrW),
+                      A=list(A_120,1),
+                      effects=list(spat.index,
+                              list(intercept=rep(1,nrow(dic_test_120)))),
+                      remove.unused = F,
+                      tag='est0_120') 
+stk0_125 = inla.stack(data = list(y=dic_test_125$corrW),
+                      A=list(A_125,1),
+                      effects=list(spat.index,
+                              list(intercept=rep(1,nrow(dic_test_125)))),
+                      remove.unused = F,
+                      tag='est0_125') 
+stk0_130 = inla.stack(data = list(y=dic_test_130$corrW),
+                      A=list(A_130,1),
+                      effects=list(spat.index,
+                              list(intercept=rep(1,nrow(dic_test_130)))),
+                      remove.unused = F,
+                      tag='est0_130') 
+
+tl = length(mesh$graph$tv[,1])
+# - the number of triangles in the mesh
+posTri = matrix(0, tl, 2)
+for (t in 1:tl){
+  temp = mesh$loc[mesh$graph$tv[t, ], ]
+  posTri[t,] = colMeans(temp)[c(1,2)] 
+}
+posTri = SpatialPoints(posTri)
+# - the positions of the triangle centres
+normal = over(poly.boundary, SpatialPoints(posTri), returnList=T)
+# - checking which mesh triangles are inside the normal area
+barrier.tri = setdiff(1:tl, unlist(normal))
+# - the triangles inside the barrier area
+
+poly.barrier = inla.barrier.polygon(mesh, barrier.triangles = barrier.tri)
+```
+
+To define a sparse matrix with ’n’ rows where n is the length of the data and columns equal to ‘c’ which is the number of nodes in the triangulations. Using inla.spde.make.A argument, this matrix connects the observations $y_i$ (at locations $s_i$) to the mesh nodes. Equivalently, this matrix defines the link between the data and spatial effect on the models. In the matrix notation, it denotes $s = Aw$ where $w$ is a vector of dimension ‘c’. 
+
+To estimate the spatial model with the stack object, we apply a function to combine data, projection matrix and effects. We combine the corrected placements in test data and a sparse matrix A we set above. For the effects, we make a vector that had the same dimension as mesh nodes including spat.index to make it easier to extract the estimates on the field after model fitting.  
+
+
+```{r fig.align='center', fig.cap="For the barrier model, we assemble the boundary. The white part is the place wherein we're interested."}
+plot(poly.barrier, col="grey", main="The barrier region (in grey)")
+```
+
+Before creating the prediction sector, we are going to draw the barrier. Firstly, we determine the number of triangles in the mesh and set the central location of the triangle using the function and argument SpatialPoints based on coordinates. After that, we check which mesh triangle is inside the normal area by function over(). This function is able to return an index list with the option returnList = T. Accordingly, we put the triangles inside the barrier area. As can be seen from the plot above, our barrier is well-behaved. 
+
+
+
+```{r stationary_modeling, echo=FALSE}
+## prior for the std dev of the error
+hyper.iid = list(prec = list(prior = 'pc.prec', fixed=FALSE,param = prior.sigma))
+# (11,-2.4,2.4)
+
+mod.stationary_110<-
+ inla(formula.stationary,data=inla.stack.data(stk0_110),
+      control.predictor=list(A=inla.stack.A(stk0_110),compute=TRUE),
+      family="gaussian", 
+      control.family = list(hyper = hyper.iid),
+      control.mode=list(restart=T, theta=c(13.2,3.46,-4.2)))
+
+mod.stationary_115<-
+ inla(formula.stationary,data=inla.stack.data(stk0_115),
+      control.predictor=list(A=inla.stack.A(stk0_115),compute=TRUE),
+      family="gaussian", 
+      control.family = list(hyper = hyper.iid),
+      control.mode=list(restart=T, theta=c(13.2,3.46,-4.2)))
+mod.stationary_120<-
+ inla(formula.stationary,data=inla.stack.data(stk0_120),
+      control.predictor=list(A=inla.stack.A(stk0_120),compute=TRUE),
+      family="gaussian", 
+      control.family = list(hyper = hyper.iid),
+      control.mode=list(restart=T, theta=c(13.2,3.46,-4.2)))
+mod.stationary_125<-
+ inla(formula.stationary,data=inla.stack.data(stk0_125),
+      control.predictor=list(A=inla.stack.A(stk0_125),compute=TRUE),
+      family="gaussian", 
+      control.family = list(hyper = hyper.iid),
+      control.mode=list(restart=T, theta=c(13.2,3.46,-4.2)))
+mod.stationary_130<-
+ inla(formula.stationary,data=inla.stack.data(stk0_130),
+      control.predictor=list(A=inla.stack.A(stk0_130),compute=TRUE),
+      family="gaussian", 
+      control.family = list(hyper = hyper.iid),
+      control.mode=list(restart=T, theta=c(13.2,3.46,-4.2)))
+
+#monitor 
+
+# mod.stationary_105$internal.summary.hyperpar$mean #13.5, 3.42,-3.7
+# mod.stationary_130$internal.summary.hyperpar$mean # 11.2, 2.3, -2.5
+# mod.stationary_110$internal.summary.hyperpar$mean #13.2, 2.6, -4.2
+### Note here how inla.stack.data and inla.stack.A are used simply to extract data and projector matrix A from stk0
+
+```
+
+The model was established under each loading level and it takes a while to run. Once we had removed the internal intercept on the model, the first argument of formulas is another intercept we made and is fitted separately on each model. As the data, we use the stacked object consisting of intercept, replicates and y etc, by putting the observed data and predictions [20] by using two commands inla.stack.data and inla.stack.A. Those two commands are used simply to extract data and projector matrix A from staking which is one of preprocessing at this stage. Based on the Laplace method and manipulation of the data, we can assume that the posterior distribution appears to be Gaussian, therefore, we use the family = “Gaussian” on the models. In addition, to estimate the values of y from the NAs, the argument "compute = True" is used in the control.predictor. Furthermore, the hyperparameters are controlled by control.mode to keep consistent. 
+
+We determined the models and plots so far, we will discover the joint estimation and prediction. First and most, the boundary is built for the prediction manually because our boundary has specific figures. Under this barrier, we can make a projection matrix A for the scenario of the prediction. Whilst this process is much the same as stacking objects we did above, the effects of latent variables are considered with the index. This index is obtained from the whole SPDE vector corresponding to the length of 3,160. Unlike the predicted latent variables, the corrected displacements are used as data and append the intercept in the effects slot. By combining the stacked object from the test data, predicted latent variable and predicted response variables, we implement the full stack object. With this full stack frame, we can get the estimates from the linear predictor $y$ at the study area [19] over the multi-axial loading levels. To get the predictions at the new locations, all indexes are created with the labels. We retrieve the summary statistics about the first quartile (25%), second quartile (50% = median) and third quartile (75%) for the posterior distribution with join.output$summary.fitted.values. To emphasise the differences between each quartile plot and the initial data plot, we put four plots in one grid. As can be seen from the comparison, there were missing values in the original plots, however, we predict the missing/removed values finely. Consequently, there are no significant differences between predicted plots and initial plots in terms of the cracked parts of the specimen. Similarly, predicted plots look identical regardless of quartiles.
+
+To validate the prediction, the data set for the validation is used. Similar to the scenario from the prediction, we create a projection matrix, and index for the full stack and full stacked object under the different loading levels. The observation matrices for mesh models, are generated from mesh created and validation data set. In the projector matrices, they contain the basis function for each basis at each column. With the mesh we created, we calculate the values of the basis function within each triangle [22]. When we select the sparse matrix from the validation data set, there are dots at an index of location point. Also, the matrices have dimensions equal to the size of the data given. 
+
+To be enabled to assess the prediction, the data consisted of NAs with the same length of x from the validation data. After that, the full stack is obtained by combining stacked the whole data set. By using inla() function, we implement the models and validations under the pressure. There are informative posteriors after applying the inla() function such as summaries, marginal densities of each parameter in the model and hyperparameters. There are With full stack object under the same modelling. 
+
+
+#### Barrier model
+
+Unlike the stationary model which is used for the shortest distance to estimate the correlation between two arbitrary points, the barrier model considers the physical barrier such as a hole or coastline. In this case, we have a hole centrally within the boundary, the barrier model is appropriate to manipulate the spatial dependencies. To start with the barrier model, we create the model object to fit the model in INLA on the Gaussian random field. The main characteristic of the barrier model is to divide the area into the normal area and the physical barrier. Therefore, the model of the barrier SGF has a different smooth function consisting of a barrier model with replicates contrary to the stationary model. 
+
+\begin{verbatim}
+barrier.model = 
+  inla.barrier.pcmatern(mesh, 
+                        barrier.triangles = barrier.tri,
+                        prior.range = prior.range, 
+                        prior.sigma = prior.sigma)
+
+formula.barrier<- y~ -1 + intercept + 
+                     f(s, model=barrier.model,replicate=s.repl)
+\end{verbatim}
+
+Conversely, there is a similarity as well. For the barrier scenario, we should stack the data and build each model using inla() and fully stacked objects similar to the stationary model. Another difference between stationary and barrier approaches is that the integration strategy is added by 'eb' which means empirical Bayes to control hyperparameters. To monitor the hyperparameters, the values can be got by the argument mod.barrier_105\$internal.summary.hyperpar\$mean. However, we use the same values as the stationary model to compare fairly. T These hyperparameters mean the expected values of log precision for the Gaussian observations, theta1 and theta2 for $s$ which represented out-of-displacement in our thesis, respectively. 
+
+
+#### Construction of the prediction grid
+
+Denote that joined output barrier is constructed by the function inla() using the stacked data and the formula for the barrier model. In this function, we use the argument 'control.predictor = list(A=inla.stack.A(joint.stack),compute=TRUE))' that is possible to calculate the posterior means of the parameters from the stacked data. To get the predictions at the new locations, we make a tibble for each model using the $x$ and $y$ coordinates from the predicted grid and the fitted mean value of joined output barrier for $z$. 
+
+By comparing the differences between stationary and barrier models, and between barrier and soap film smoothing models, how big the differences are and which parts are meaningful from the plots in the next chapter. 
+
+### Finite element spatial splines approach
+
+In terms of this method, we will use the fdaPDE package made by Laura M. Sangalli who is the person to write the paper [25].  Under the guidance, we need to set the mesh consisting of the boundary and boundary_nodes is the matrix of the x-y coordinates of the data. Note that boundary_segments is the matrix with 0 and 1 which has the boundary dimension, and the last value should be cyclic. Unlike the SPDE approach that needs the points within the boundary and the buffer zones, there is no boundary outside and the location of data is only set in the boundary under this application. To emphasise the triangulation of the domain we are interested in, create.mesh.2D is used to create the mesh. Arguments of nodes which are vertices of the triangles and of the hole are compulsory because we have a hole in the interest of the domain, therefore, the result of the mesh contains the list of attributes, segments and neighbours. 
+The right side of the diagram (4.5) below represents the dispensation of the data in the hole and the left side of the figure shows the triangulation within the study area. According to the left picture, we can see the size of the triangle depending on the sparsity of the data. 
+
+```{r echo=FALSE, fig.cap="To implement a spatial spline approach, we need to make the fictional points in the hole (left side). we can see there is a lot of triangular mesh within the boundary (right side)."}
+fsb_spline<-fsb %>% distinct()    
+boundary_nodes = as.matrix(cbind(fsb_spline$x,fsb_spline$y))
+n_b<-dim(fsb_spline)[1]
+boundary_segments = bind_cols(1:n_b,c(2:n_b,1))
+
+locations_110 = as.matrix(cbind(dic_test_110$x,dic_test_110$y))
+locations_115 = as.matrix(cbind(dic_test_115$x,dic_test_115$y))
+locations_120 = as.matrix(cbind(dic_test_120$x,dic_test_120$y))
+locations_125 = as.matrix(cbind(dic_test_125$x,dic_test_125$y))
+locations_130 = as.matrix(cbind(dic_test_130$x,dic_test_130$y))
+
+hole <-as.matrix(cbind(fsb.hole$x,fsb.hole$y))
+hole.grid <- expand.grid(x=seq(-r,r,length.out=100),
+                         y=seq(-r,r,length.out=100)) %>% filter(x^2+y^2<r^2)
+sample.out_plt <-rep(FALSE,nrow(dic_110))
+sample.out_plt[sample(1:nrow(dic_110), size=5000)]  <- T 
+#resampling for plot
+dic_plt_110 <-dic_110 %>% 
+  select(corrX,corrY,corrW) %>% 
+  filter(sample.out_plt)%>% 
+              rename(x=corrX,y=corrY)
+
+locations_110_plt = as.matrix(cbind(dic_plt_110$x,dic_plt_110$y))
+
+mesh_110_plt <- create.mesh.2D(nodes = locations_110_plt, 
+                           holes = hole.grid)
+
+par(mfrow=c(1,2))
+plot(hole.grid,pch=".")
+title("The hole grid")
+plot(mesh_110_plt, pch='.')
+title("The triangulation\n of the boundary")
+```
+
+
+After creating the mesh, we need to construct a finite element basis which is called FEMbasis using the function create.FEM.basis() in R. Since we had constructed the mesh to tell the boundary with the triangulations, this function includes the linear attribute on the finite field. When we are ready to set up this approach with the mesh and basis functions, the function from smooth.FEM() performs a spatial spline regression model with regularisation. Similar to the SPDE approach we implemented above, this method is using the partial differential equation as a penalisation term involving the Laplacian approximation by assuming that the domain is isotropic and stationary. However, it is not stochastic. In this function, there are 6 different arguments. Note that locations as explanatory variables are the coordinates of x and y and observations as the response variable is corrected displacement from the data in this research. To optimise the smoothing parameter, we set the value as lambda.selection.criterion='grid' to adopt the pure evaluation method. As we initialise the grid value in the argument, the vector of lambda should be provided from 1e-04 to 1e+02. Also, 'GCV' is determined for the argument lambda.selection.lossfunction because we have a loss function in the penalised term when the data contains null values. With FEMbasis as the basis functions, we denote that DOF.evaluation = 'stochastic' to reduce the time-consuming by controlling the degree of freedom even though this model is not stochastic. As we are using 15,000 nodes for each mesh, this argument is highly recommended but it doesn't guarantee high accuracy. 
+
+
+Based on this methodology, we simulate the predictions between the soap film smoothing, SPDE and spatial spline regression models in the next chapter. Furthermore, we prove how significantly different between models are. 
+
+<!--chapter:end:02-chap2.Rmd-->
+
+```{r include_packages_2, include = FALSE}
+# This chunk ensures that the thesisdown package is
+# installed and loaded. This thesisdown package includes
+# the template files for the thesis and also two functions
+# used for labeling and referencing
+if (!require(remotes)) {
+  if (params$`Install needed packages for {thesisdown}`) {
+    install.packages("remotes", repos = "https://cran.rstudio.com")
+  } else {
+    stop(
+      paste(
+        'You need to run install.packages("remotes")',
+        "first in the Console."
+      )
+    )
+  }
+}
+if (!require(dplyr)) {
+  if (params$`Install needed packages for {thesisdown}`) {
+    install.packages("dplyr", repos = "https://cran.rstudio.com")
+  } else {
+    stop(
+      paste(
+        'You need to run install.packages("dplyr")',
+        "first in the Console."
+      )
+    )
+  }
+}
+if (!require(ggplot2)) {
+  if (params$`Install needed packages for {thesisdown}`) {
+    install.packages("ggplot2", repos = "https://cran.rstudio.com")
+  } else {
+    stop(
+      paste(
+        'You need to run install.packages("ggplot2")',
+        "first in the Console."
+      )
+    )
+  }
+}
+if (!require(bookdown)) {
+  if (params$`Install needed packages for {thesisdown}`) {
+    install.packages("bookdown", repos = "https://cran.rstudio.com")
+  } else {
+    stop(
+      paste(
+        'You need to run install.packages("bookdown")',
+        "first in the Console."
+      )
+    )
+  }
+}
+if (!require(thesisdown)) {
+  if (params$`Install needed packages for {thesisdown}`) {
+    remotes::install_github("ismayc/thesisdown")
+  } else {
+    stop(
+      paste(
+        "You need to run",
+        'remotes::install_github("ismayc/thesisdown")',
+        "first in the Console."
+      )
+    )
+  }
+}
+library(thesisdown)
+library(dplyr)
+library(ggplot2)
+library(knitr)
+```
+
+
+# Spatial analysis {#analysis}
+
+Spatial analysis from the data we experimented with is crucial to analyse the data and figure out the dependencies over the multiaxial loading forces since this type of analysis has not been done yet by Engineers. Provided on the methodology, we will account for how to interpret the simulations and comparisons using the plots. This section will be divided into two main parts over the loading level and then three parts about the analysis methods. The first main part is about the levels before cracking and the second one is represented the status closer to the failure of the specimen. After that, we will discuss the differences between the methodologies, for instance, soap film smoother, stochastic partial differential equations and spatial spline regression we explained above. 
+
+The first part of the analysis is to perform the soap film smoothing using the appropriate R packages such as \texttt{mgcv}. The main principle is that the boundary is not specifically defined, unlike the theory so that we have to precisely determine the smoothing methods for the hole and the boundary both. In the second part of the analysis, stochastic partial differential equations were used to deal with the variability as our study area of interest is unknown. In this thesis, stochastic means to be compatible with probability. The third approach is called spatial spline regression to use internal knots, mesh and triangulation. This method seems to combine soap film smoothing and the SPDE techniques. 
+
+The data set has information for X, Y (e.g spatial locations) and W displacement coordinates which were observed but modified by appropriate manipulation because two cameras had been used to carry out the experiment. Not only the data was not precisely identical to the real coordinates but we could also find part of the data is missing. Therefore, data is concentrated in the centre like the normal distribution after the manipulation. In this chapter, we will focus on justifying the characteristics of each model and illustrating the plots of the spatial models. 
+
+	
+## Soap film smoothing
+
+According to the predictions from the soap film smoothing application, the simulated plot and data plot resemble each other. After dealing with the missing values of data, this method is robust to fill out the values and anticipate spatial dependency starting at the breakdown points. When we increase the same value of the grid as the original data at 150, there are some missing values, however, the predictions are well-defined at the grid level of 50. Further, we fix the range from -0.035 to 0.07 for consistency for all predicted plots including the below plots.
+
+```{r echo=FALSE,fig.align="center", fig.cap="Identifying the differences between the predicted response variable and the data experimented under the same laminate."}
+##predictions
+pred.grid<- 
+  expand.grid(x=seq(-side.lim,side.lim,length.out=50),
+              y=seq(-up.lim,up.lim,length.out=50))
+
+pred.grid<-
+pred.grid %>%
+  filter((x-centerx)^2+y^2>r^2,
+         x>-35.15+sqrt(20^2-(y)^2),
+         x< 34.85-sqrt(20^2-(y)^2))
+   
+# change and do 110, 115,120,125,130,
+pdata_110 <- transform(pred.grid, 
+                   z = predict(b_110, pred.grid, 
+                               type = "response"))
+pdata_115 <- transform(pred.grid, 
+                   z = predict(b_115, pred.grid, 
+                               type = "response"))
+pdata_120 <- transform(pred.grid, 
+                   z = predict(b_120, pred.grid, 
+                               type = "response"))
+pdata_125 <- transform(pred.grid, 
+                   z = predict(b_125, pred.grid, 
+                               type = "response"))
+pdata_130 <- transform(pred.grid, 
+                   z = predict(b_130, pred.grid, 
+                               type = "response"))
+
+
+plot2<-
+dic_110 %>% 
+  ggplot(aes(corrX,corrY,z=corrW))+
+        stat_summary_2d(bins=150) + 
+        scale_fill_viridis_c(option="plasma",
+                             breaks=seq(-0.12,0.035,length=5),
+                             limits=c(-0.12,0.035))+ 
+          labs(subtitle="14.71418kN") +
+                xlab("CorrX") + 
+                ylab("CorrY") +
+                coord_fixed()
+
+plot5<-
+dic_125 %>% 
+  ggplot(aes(corrX,corrY,z=corrW))+
+       stat_summary_2d(bins=150) + 
+        scale_fill_viridis_c(option="plasma",
+                           breaks=seq(-0.12,0.035,length=5),
+                             limits=c(-0.12,0.035))+
+          labs(subtitle="16.5487kN") +
+                xlab("CorrX") + 
+                ylab("CorrY") +
+                coord_fixed()
+
+
+# prefered way
+pred_plot2 <- pdata_110 %>% 
+              ggplot(aes(x,y,z=z))+
+                stat_summary_2d(bins=50) + 
+                scale_fill_viridis_c(option="plasma",
+                                     breaks=seq(-0.12,0.035,length=5),
+                                     limits=c(-0.12,0.035))+
+                labs(subtitle="predicted 14.71418kN") + 
+                xlab("CorrX") + 
+                ylab("CorrY") +
+                coord_fixed()
+
+pred_plot3 <- pdata_115 %>% 
+              ggplot(aes(x,y,z=z))+
+                stat_summary_2d(bins=60) + 
+                scale_fill_viridis_c(option="plasma",
+                                     breaks=seq(-0.12,0.035,length=5),
+                                     limits=c(-0.12,0.035))+
+                labs(subtitle="predicted 15.37513kN") +
+                xlab("CorrX") + 
+                ylab("CorrY") +
+                coord_fixed()
+
+pred_plot4 <- pdata_120 %>% 
+              ggplot(aes(x,y,z=z))+
+                stat_summary_2d(bins=55) + 
+                scale_fill_viridis_c(option="plasma",
+                                     breaks=seq(-0.12,0.035,length=5),
+                                     limits=c(-0.12,0.035))+
+                labs(subtitle="predicted 15.98287kN") + 
+                xlab("CorrX") + 
+                ylab("CorrY") +
+                coord_fixed()
+# range(pdata_125$z, na.rm=T) #-0.09503502  0.03224673
+# range(dic_125$corrW) #-0.0948429  0.0346246
+# range(df.pred_125$median) #-0.11194053  0.02214731
+pred_plot5 <- pdata_125 %>% 
+              ggplot(aes(x,y,z=z))+
+                stat_summary_2d(bins=50) + 
+                scale_fill_viridis_c(option="plasma",
+                                     breaks=seq(-0.12,0.035,length=5),
+                                     limits=c(-0.12,0.035))+
+                labs(subtitle="predicted 16.5487kN") + 
+                xlab("CorrX") + 
+                ylab("CorrY") +
+                coord_fixed()
+
+pred_plot6 <- pdata_130 %>% 
+              ggplot(aes(x,y,z=z))+
+                stat_summary_2d(bins=50) + 
+                scale_fill_viridis_c(option="plasma",
+                                     breaks=seq(-0.35,0.07,length=5),
+                                     limits=c(-0.35,0.07))+
+                labs(subtitle="Soap film smoothing") + 
+                xlab("CorrX") + 
+                ylab("CorrY") +
+                coord_fixed()
+
+combined_plot6_soap <- plot6+labs(title = "",subtitle="Data")+theme(legend.position = "none")+pred_plot6
+
+(pred_plot2+plot2)/(pred_plot5+plot5) +
+  plot_annotation(
+  title = "The predicted plots of the soap film smoothing\n for the data set under loading levels")
+```
+
+There are 4 plots to compare the spatial dependencies forecasted by soap film smoother and data plots above. At a level of 14.71418kN, the spatial dependency is generally low because the breaking down doesn't start yet. Since the cracks are shown at the edges of the specimen at 16.5487kN, the figures of spatial dependency represented by a different colour in the plot are away from 0. Nevertheless, we can see that the range of values is apparently similar to predictions and observations. 
+
+### Difference plots between data and prediction
+
+To see the differences between the data we observed and the prediction for each load, for example, we make a plot at the level of `r  loads_13$load[111]` kN and `r  loads_13$load[126]` kN, respectively. We compared predictions and the data gathered from the experiment above and will make plots to validate the performance of the projections using soap film smoothing under function GAM. For this, the response variable, corrected displacement, is subtracted by the prediction which is mutated and is set in the range from -0.09 to 0.03 to be in the same conditions. 
+
+```{r diff_soap}
+diff_110<- dic_test_110 %>%
+            mutate(predW=predict(b_110),
+                   diff=corrW-predW)
+
+diff_125<- dic_test_125 %>%
+            mutate(predW=predict(b_125),
+                   diff=corrW-predW)
+
+diff_130<- dic_test_130 %>%
+            mutate(predW=predict(b_130),
+                   diff=corrW-predW)
+
+# range(diff_110$corrW)
+# range(diff_125$corrW)
+diff.plot_110 <- 
+diff_110 %>%
+  ggplot(aes(x,y,z=diff))+
+    stat_summary_2d(bins=80) +
+        scale_fill_viridis_c(option="plasma",
+                             breaks=seq(-0.09,0.03,length=5),
+                             limits=c(-0.09,0.03))+
+        labs(subtitle ="14.71418kN") +
+          coord_fixed() + xlab("CorrX") + ylab("CorrY")
+diff.plot_125 <- 
+diff_125 %>%
+  ggplot(aes(x,y,z=diff))+
+    stat_summary_2d(bins=80) +
+        scale_fill_viridis_c(option="plasma",
+                             breaks=seq(-0.09,0.03,length=5),
+                             limits=c(-0.09,0.03))+
+        labs(subtitle ="16.5487kN") +
+          coord_fixed() + xlab("CorrX") + ylab("CorrY")
+# range(diff_130$diff)
+diff.plot_soap <- 
+diff_130 %>%
+  ggplot(aes(x,y,z=diff))+
+    stat_summary_2d(bins=80) +
+        scale_fill_viridis_c(option="plasma",
+                             breaks=seq(-0.15,0.12,length=5),
+                             limits=c(-0.15,0.12))+
+        labs(subtitle ="differences") +
+          coord_fixed() + xlab("CorrX") + ylab("CorrY")
+
+```
+
+
+```{r fig.align="center", fig.cap="Comparison of the model with soap film smoothing against the data for each load"}
+(diff.plot_110+diff.plot_125) + plot_annotation(
+  title = "Differences between predictions\nusing soap film smoothing vs. Real data")
+```
+
+Throughout these plots below, the orange colour represents the value of differences in spatial dependency seems to be equal to 0. It means that our predictions are well-defined, however, both curved edges were distinguished with yellow and purple colours as the highest differences in these plots at 0.03 and -0.09, respectively. Even though those parts have some distinctions, they are not critically huge. In other words, the change of both edges is meaningful, but the horizontal borders are not impressive. Because those parts are connected with the machine and this boundary is imaginary to understand spatial dependence.
+
+## Spatial models based Stochastic partial differential equations (SPDE) 
+
+To design the plots, we define the plotting region to be the same as the study area polygon. For plots, the projector is calculated from the mesh onto a 300*300 grid by inla.mesh.projector. Since the stationary models on each load have different ranges, zlim is set at (-0.39, 0.088) to compare plots. Moreover, it is challenging to detect the change of equidistant values in these plots, that is why we add contours. With the contours, It is easy to tell how the cracks progress. The more load forces the more the area is getting narrow. 
+
+```{r echo=FALSE, fig.cap="This table is shown that there are significant changes in equidistant values on the stationary models over the loads."}
+local.plot.field = function(field, mesh, xlim, ylim, zlim, n.contours=7, ...){
+  stopifnot(length(field) == mesh$n)
+  # - error when using the wrong mesh
+  if (missing(xlim)) xlim = poly@bbox[1, ] 
+  if (missing(ylim)) ylim = poly@bbox[2, ]
+  # - choose plotting region to be the same as the study area polygon
+  proj = inla.mesh.projector(mesh, xlim = xlim, 
+                             ylim = ylim, dims=c(300, 300))
+
+  # - Can project from the mesh onto a 300x300 grid 
+  #   for plots
+  field.proj = inla.mesh.project(proj, field)
+  # - Do the projection
+  if (missing(zlim)) zlim = range(field.proj)
+  image.plot(list(x = proj$x, y=proj$y, z = field.proj), 
+             xlim = xlim, ylim = ylim,zlim = c(-0.12,0.035), asp=1,col=viridis::plasma(200) ,...)  
+  contour(x = proj$x, y=proj$y, z = field.proj,levels=seq(zlim[1], zlim[2],length.out = n.contours),add=TRUE, drawlabels=F, col="white")
+  # - without contours it is very very hard to see what are equidistant values
+}
+
+plot.new()
+par(mfrow=c(2,2))
+global.zlim=c(-1, 1)*5
+
+field <- function(mod.stationary){
+  field = mod.stationary$summary.random$s$mean + mod.stationary$summary.fixed['intercept', 'mean']
+  return(field)
+}
+
+field_110 <- field(mod.stationary_110)
+local.plot.field(field_110[spat.index$s.repl==1], mesh, main=paste(), zlim=global.zlim,xlim=c(-20,20),ylim=c(-13,13))
+plot(poly.barrier, add=T, border="black", col="white")
+title(sub="14.71418kN")
+
+field_115 <- field(mod.stationary_115)
+local.plot.field(field_115[spat.index$s.repl==1], mesh, main=paste(), zlim=global.zlim,xlim=c(-20,20),ylim=c(-13,13))
+plot(poly.barrier, add=T, border="black",col="white")
+title(sub="15.37513kN")
+
+field_120 <- field(mod.stationary_120)
+local.plot.field(field_120[spat.index$s.repl==1], mesh, main=paste(), zlim=global.zlim,xlim=c(-20,20),ylim=c(-13,13))
+plot(poly.barrier, add=T, border="black", col="white")
+title(sub="15.98287kN")
+
+field_125 <- field(mod.stationary_125)
+local.plot.field(field_125[spat.index$s.repl==1], mesh, main=paste(), zlim=global.zlim,xlim=c(-20,20),ylim=c(-13,13))
+plot(poly.barrier, add=T, border="black", col="white")
+title(sub="16.5487kN")
+
+
+mtext("Stationary models under each load level", outer = TRUE, side = 3,line = -3)
+```
+
+According to the plots above, the spatial dependencies are varied alongside the axis. Over the severe load, we can see the area around the hole and both edges suffered along the contours. Interestingly, the contour line initiate along the points where spatial replications of index are 1. Hence, the lines can be seen diagonally except for the regions of curved edges suffered. 
+
+```{r pred_spde_plt, echo=FALSE}
+s.index <- inla.spde.make.index(name="s",n.spde=spde$n.spde)
+
+pred.grid<- expand.grid(x=seq(-side.lim,side.lim,length.out=150),
+                        y=seq(-up.lim,up.lim,length.out=150))
+
+pred.grid<-
+pred.grid %>%
+  filter(x^2+y^2>r^2,
+         x>-35.15+sqrt(20^2-(y)^2),
+         x< 34.85-sqrt(20^2-(y)^2))
+
+A.pred <- inla.spde.make.A(mesh,
+                           loc=as.matrix(pred.grid))
+
+stack.pred.latent<- inla.stack(data=list(xi=NA),
+                              A=list(A.pred),
+                              effects=list(s.index),
+                               remove.unused = FALSE, 
+                              tag="pred.latent")
+
+
+stack.pred.response<- inla.stack(data=list(corrW=NA),
+                                 A=list(A.pred),
+                                 effects=list(c(s.index,list(intercept=1))),
+                                 remove.unused = F,
+                                 tag="pred.response")
+
+
+joint.stack_110<-inla.stack(stk0_110,stack.pred.latent,stack.pred.response,remove.unused = FALSE)
+joint.stack_115<-inla.stack(stk0_115,stack.pred.latent,stack.pred.response,remove.unused = FALSE)
+joint.stack_120<-inla.stack(stk0_120,stack.pred.latent,stack.pred.response,remove.unused = FALSE)
+joint.stack_125<-inla.stack(stk0_125,stack.pred.latent,stack.pred.response,remove.unused = FALSE)
+joint.stack_130<-inla.stack(stk0_130,stack.pred.latent,stack.pred.response,remove.unused = FALSE)
+
+join.output_110<-inla(formula.stationary,
+                      data=inla.stack.data(joint.stack_110),
+                      control.predictor = list(A=inla.stack.A(joint.stack_110),compute=TRUE))
+
+join.output_115<-inla(formula.stationary,
+                      data=inla.stack.data(joint.stack_115),
+                      control.predictor = list(A=inla.stack.A(joint.stack_115),compute=TRUE))
+
+join.output_120<-inla(formula.stationary,
+                      data=inla.stack.data(joint.stack_120),
+                      control.predictor = list(A=inla.stack.A(joint.stack_120),compute=TRUE))
+
+join.output_125<-inla(formula.stationary,
+                      data=inla.stack.data(joint.stack_125),
+                      control.predictor = list(A=inla.stack.A(joint.stack_125),compute=TRUE))
+
+join.output_130<-inla(formula.stationary,
+                      data=inla.stack.data(joint.stack_130),
+                      control.predictor = list(A=inla.stack.A(joint.stack_130),compute=TRUE))
+
+# to get the predictions at the new locations
+index.pred.latent_110 <- inla.stack.index(joint.stack_110,tag="pred.latent")$data
+index.pred.response_110 <- inla.stack.index(joint.stack_110,tag="pred.response")$data
+index.pred.est_110 <- inla.stack.index(joint.stack_110,tag="est0_110")$data
+
+index.pred.latent_115 <- inla.stack.index(joint.stack_115,tag="pred.latent")$data
+index.pred.response_115 <- inla.stack.index(joint.stack_115,tag="pred.response")$data
+index.pred.est_115 <- inla.stack.index(joint.stack_115,tag="est0_115")$data
+
+index.pred.latent_120 <- inla.stack.index(joint.stack_120,tag="pred.latent")$data
+index.pred.response_120 <- inla.stack.index(joint.stack_120,tag="pred.response")$data
+index.pred.est_120 <- inla.stack.index(joint.stack_120,tag="est0_120")$data
+
+index.pred.latent_125 <- inla.stack.index(joint.stack_125,tag="pred.latent")$data
+index.pred.response_125 <- inla.stack.index(joint.stack_125,tag="pred.response")$data
+index.pred.est_125 <- inla.stack.index(joint.stack_125,tag="est0_125")$data
+
+index.pred.latent_130 <- inla.stack.index(joint.stack_130,tag="pred.latent")$data
+index.pred.response_130 <- inla.stack.index(joint.stack_130,tag="pred.response")$data
+index.pred.est_130 <- inla.stack.index(joint.stack_130,tag="est0_130")$data
+
+
+pred.tibble <- function(join.output,index.pred.response){
+  df.pred<-tibble(x = pred.grid$x,
+                  y = pred.grid$y,
+                  median = join.output$summary.fitted.values[index.pred.response,"0.5quant"],
+                  q1 = join.output$summary.fitted.values[index.pred.response,"0.025quant"],
+                  q3 = join.output$summary.fitted.values[index.pred.response,"0.975quant"])
+  return(df.pred)
+}  
+
+df.pred_110 <- pred.tibble(join.output_110,index.pred.response_110)
+df.pred_115 <- pred.tibble(join.output_115,index.pred.response_115)
+df.pred_120 <- pred.tibble(join.output_120,index.pred.response_120)
+df.pred_125 <- pred.tibble(join.output_125,index.pred.response_125)
+df.pred_130 <- pred.tibble(join.output_130,index.pred.response_130)
+
+pred.plots <- function(range_pred,df.pred){
+
+  plot_pred_median<-
+    df.pred %>%
+      ggplot(aes(x,y,z=median))+
+        stat_summary_2d(bins=150) +
+        scale_fill_viridis_c(option="plasma",
+                             breaks=seq(-0.12,0.035,length=5),
+                             limits=c(-0.12,0.035))+
+        ggtitle("predicted median") +
+          coord_fixed()
+
+  plot_pred_q1<-
+    df.pred %>%
+      ggplot(aes(x,y,z=q1))+
+        stat_summary_2d(bins=150) +
+        scale_fill_viridis_c(option="plasma",
+                             breaks=seq(-0.12,0.035,length=5),
+                             limits=c(-0.12,0.035))+
+        ggtitle("predicted q1")+
+          coord_fixed()
+
+  plot_pred_q3<-
+    df.pred %>%
+      ggplot(aes(x,y,z=q3))+
+        stat_summary_2d(bins=150) +
+        scale_fill_viridis_c(option="plasma",
+                             breaks=seq(-0.12,0.035,length=5),
+                             limits=c(-0.12,0.035))+
+        ggtitle("predicted q3")+
+          coord_fixed()
+
+### KAI: Title + caption to these plots (below) also emphasize the difference between q1 (first quartile (25%) second quartile (50% = median) and third quartile (75%)) 
+  
+plot_pred_q1+ theme(legend.position = "none")+plot_pred_median+ theme(legend.position = "none")+plot_pred_q3+theme(legend.position = "none")
+}
+
+
+plot2 <- 
+  dic_110 %>%
+    ggplot(aes(corrX,corrY))+
+      stat_summary_2d(aes(z=corrW),bins=150) +
+        scale_fill_viridis_c(option="plasma",
+                             breaks=seq(-0.12,0.035,length=11),
+                             limits=c(-0.12,0.035))+
+          ggtitle("Data - 14.71418kN")
+# pred.plots(range_pred_110,df.pred_110)+plot2
+
+plot3 <- 
+  dic_115 %>%
+    ggplot(aes(corrX,corrY))+
+      stat_summary_2d(aes(z=corrW),bins=150) +
+        scale_fill_viridis_c(option="plasma",
+                             breaks=seq(-0.12,0.035,length=11),
+                             limits=c(-0.12,0.035))+
+          ggtitle("Data - 15.37513kN")
+# pred.plots(range_pred_115,df.pred_115)+plot3
+
+plot4 <- 
+  dic_120 %>%
+    ggplot(aes(corrX,corrY))+
+      stat_summary_2d(aes(z=corrW),bins=150) +
+        scale_fill_viridis_c(option="plasma",
+                             breaks=seq(-0.12,0.035,length=11),
+                             limits=c(-0.12,0.035))+
+          ggtitle("Data - 15.98287kN")+ labs(x = "x", y="y")
+
+
+plot5 <- 
+  dic_125 %>%
+    ggplot(aes(corrX,corrY))+
+      stat_summary_2d(aes(z=corrW),bins=150) +
+        scale_fill_viridis_c(option="plasma",
+                             breaks=seq(-0.12,0.035,length=11),
+                             limits=c(-0.12,0.035))+
+          ggtitle("Data - 16.5487kN")+ labs(x = "x", y="y")
+
+
+# (pred.plots(range_pred_110,df.pred_110)+plot2)
+# pred.plots(range_pred_115,df.pred_115)+plot3
+# pred.plots(range_pred_120,df.pred_120)+plot4
+```
+
+```{r echo=FALSE, fig.cap="Plots seem identical between predictions with Q1, Q2 and Q3. Compared to the plot of data, they looked at a similar level of cracks.", fig.align='center'}
+pred.plots(range_pred_125,df.pred_125)+plot5 + 
+  plot_annotation(
+  title = "The predicted plots for the stationary models \nunder the q1, median and q3 and \nfor the real data set at 16.5487kN")
+```
+
+To emphasize the differences between each quartile plot and the initial data plot, we put four plots in one grid. As can be seen from the comparison, there were missing values in the original plots, however, we predict the missing/removed values finely. First of all, we guessed there would have the differences between the quartiles, however, we could not find them because the sample size is enough huge at 15,000 and the concentration of data occurs by the Law of large numbers and central limit theorem. Consequently, there are no significant differences between predicted plots and initial plots in terms of the cracked parts of the specimen. Similarly, predicted plots look identical regardless of quartiles. Hence, we will generally use the median for predictions in the SPDE to compare other predictions. 
+
+### Validation
+
+In this section, we guess the posterior mean by priors as mentioned above in the methodology. Using prior distribution, we can predict precisely but it would take longer. 
+
+```{r echo=FALSE, error=TRUE, fig.cap="We consider the performance based on the disperse of the data points. It can be seen that the mean of the posterior distribution and observed data are well defined along with the slope."}
+A.val_110 = inla.spde.make.A(mesh,loc=cbind(dic_val_110$x, dic_val_110$y))
+stval_110 <- inla.stack(data = list(corrW = NA), # NA: no data, only enable predictions
+                        A = list(A.val_110, 1), 
+                        effects = list(spat.index,
+                                  list(intercept=rep(1,nrow(dic_val_110)))),
+                        remove.unused = F,tag = 'stval_110')
+stfull_110 <- inla.stack(stk0_110, stval_110) 
+
+A.val_115 = inla.spde.make.A(mesh,loc=cbind(dic_val_115$x, dic_val_115$y))
+stval_115 <- inla.stack(data = list(corrW = NA), # NA: no data, only enable predictions
+                        A = list(A.val_115, 1), 
+                        effects = list(spat.index,
+                                  list(intercept=rep(1,nrow(dic_val_115)))),
+                        remove.unused = F,tag = 'stval_115')
+stfull_115 <- inla.stack(stk0_115, stval_115) 
+
+A.val_120 = inla.spde.make.A(mesh,loc=cbind(dic_val_120$x, dic_val_120$y))
+stval_120 <- inla.stack(data = list(corrW = NA), # NA: no data, only enable predictions
+                        A = list(A.val_120, 1), 
+                        effects = list(spat.index,
+                                  list(intercept=rep(1,nrow(dic_val_120)))),
+                        remove.unused = F,tag = 'stval_120')
+stfull_120 <- inla.stack(stk0_120, stval_120) 
+
+A.val_125 = inla.spde.make.A(mesh,loc=cbind(dic_val_125$x, dic_val_125$y))
+stval_125 <- inla.stack(data = list(corrW = NA), # NA: no data, only enable predictions
+                        A = list(A.val_125, 1), 
+                        effects = list(spat.index,
+                                  list(intercept=rep(1,nrow(dic_val_125)))),
+                        remove.unused = F,tag = 'stval_125')
+stfull_125 <- inla.stack(stk0_125, stval_125) 
+
+A.val_130 = inla.spde.make.A(mesh,loc=cbind(dic_val_130$x, dic_val_130$y))
+stval_130 <- inla.stack(data = list(corrW = NA), # NA: no data, only enable predictions
+                        A = list(A.val_130, 1), 
+                        effects = list(spat.index,
+                                  list(intercept=rep(1,nrow(dic_val_130)))),
+                        remove.unused = F,tag = 'stval_130')
+stfull_130 <- inla.stack(stk0_130, stval_130)
+
+#modelling and validation
+vres_110 <- 
+  inla(formula.stationary,  
+       data = inla.stack.data(stfull_110),
+       control.predictor = list(compute = TRUE,
+       A = inla.stack.A(stfull_110)),
+       control.family = list(hyper = list(prec = hyper.iid)), 
+       control.mode = list(theta = mod.stationary_110$mode$theta, restart = FALSE))
+iva_110 <- inla.stack.index(stfull_110, 'stval_110')$data 
+
+vres_115 <- 
+  inla(formula.stationary,  
+       data = inla.stack.data(stfull_115),
+       control.predictor = list(compute = TRUE,
+       A = inla.stack.A(stfull_115)),
+       control.family = list(hyper = list(prec = hyper.iid)), 
+       control.mode = list(theta = mod.stationary_115$mode$theta, restart = FALSE))
+iva_115 <- inla.stack.index(stfull_115, 'stval_115')$data 
+
+vres_120 <- 
+  inla(formula.stationary,  
+       data = inla.stack.data(stfull_120),
+       control.predictor = list(compute = TRUE,
+       A = inla.stack.A(stfull_120)),
+       control.family = list(hyper = list(prec = hyper.iid)), 
+       control.mode = list(theta = mod.stationary_120$mode$theta, restart = FALSE))
+iva_120 <- inla.stack.index(stfull_120, 'stval_120')$data 
+
+vres_125 <- 
+  inla(formula.stationary,  
+       data = inla.stack.data(stfull_125),
+       control.predictor = list(compute = TRUE,
+       A = inla.stack.A(stfull_125)),
+       control.family = list(hyper = list(prec = hyper.iid)), 
+       control.mode = list(theta = mod.stationary_125$mode$theta, restart = FALSE))
+iva_125 <- inla.stack.index(stfull_125, 'stval_125')$data 
+
+vres_130 <- 
+  inla(formula.stationary,  
+       data = inla.stack.data(stfull_130),
+       control.predictor = list(compute = TRUE,
+       A = inla.stack.A(stfull_130)),
+       control.family = list(hyper = list(prec = hyper.iid)), 
+       control.mode = list(theta = mod.stationary_130$mode$theta, restart = FALSE))
+iva_130 <- inla.stack.index(stfull_130, 'stval_130')$data
+
+par(mfrow = c(2, 2), mar = c(3, 3, 2, 0.5), mgp = c(1.75, 0.5, 0))
+
+plot(vres_110$summary.fitted.values$`0.5quant`[iva_110], dic_val_110$corrW, asp = 1,xlab = 'Posterior mean at 14.71418kN', ylab = 'Observed') 
+abline(0:1, col = gray(0.7)) 
+
+plot(vres_115$summary.fitted.values$`0.5quant`[iva_115], dic_val_115$corrW, asp = 1,xlab = 'Posterior mean at 15.37513kN', ylab = 'Observed') 
+abline(0:1, col = gray(0.7)) 
+
+plot(vres_120$summary.fitted.values$`0.5quant`[iva_120], dic_val_120$corrW, asp = 1,xlab = 'Posterior mean at 15.98287kN', ylab = 'Observed') 
+abline(0:1, col = gray(0.7)) 
+
+plot(vres_125$summary.fitted.values$`0.5quant`[iva_125], dic_val_125$corrW, asp = 1,xlab = 'Posterior mean at 16.5487kN', ylab = 'Observed') 
+abline(0:1, col = gray(0.7)) 
+
+mtext("The validation plots by posterior mean", outer = TRUE, side = 3,line = -1)
+
+
+dif.val_110<-abs(vres_110$summary.fitted.values$mean[iva_110]-dic_val_110$corrW)
+dif.val_115<-abs(vres_115$summary.fitted.values$mean[iva_115]-dic_val_115$corrW)
+dif.val_120<-abs(vres_120$summary.fitted.values$mean[iva_120]-dic_val_120$corrW)
+dif.val_125<-abs(vres_125$summary.fitted.values$mean[iva_125]-dic_val_125$corrW)
+dif.val_130<-abs(vres_130$summary.fitted.values$mean[iva_130]-dic_val_130$corrW)
+```
+
+Whilst we weighed the differences between the first, second and third quartiles above, we explore the performance from the plots that represent the distribution of the observed data and posterior mean values estimated this time. Surprisingly, as there were no noticeable distinctions under the change over quartiles, we only use the mean value to render how the relationship between the observed data and the posterior mean. The plots show that all data is rise along the line as the posterior mean goes forward. In other words, if the mean value of posterior distribution rise, the value of observed data tends to increase. In terms of dispersion of the data, the distance from the data to the slope is getting shrunk over the loading levels. Thus, we can regard the data at 16.5487kN as overfitted. Once we also examine the correlation between the observed and posterior mean values, it is obtained a high correlation of 0.996 at the same level of loading. 
+
+
+```{r echo=FALSE}
+barrier.model = 
+  inla.barrier.pcmatern(mesh, 
+                        barrier.triangles = barrier.tri,
+                        prior.range = prior.range, 
+                        prior.sigma = prior.sigma)
+
+formula.barrier<-y~ -1+intercept + 
+   f(s, model=barrier.model,replicate=s.repl)
+
+
+# for initial value, monitor here
+#mod.barrier$internal.summary.hyperpar$mean
+stk.barrier_110 = inla.stack(data = list(y=dic_test_110$corrW),
+                  A=list(A_110,1),
+                  effects=list(spat.index,
+                          list(intercept=rep(1,nrow(dic_test_110)))),
+                  remove.unused = F,
+                 tag='est.barrier_110') 
+ 
+mod.barrier_110<-
+ inla(formula.barrier,
+      data=inla.stack.data(stk.barrier_110),
+      control.predictor=list(A=inla.stack.A(stk.barrier_110),compute=TRUE),
+      family="gaussian", 
+      control.family = list(hyper = hyper.iid),
+      control.inla= list(int.strategy = "eb"),
+      control.mode=list(restart=T, theta=c(13.5,-5,-2.1)))  
+ 
+field.barrier_110 = mod.barrier_110$summary.random$s$`0.5quant` + mod.barrier_110$summary.fixed['intercept', 'mean']
+
+stk.barrier_115 = inla.stack(data = list(y=dic_test_115$corrW),
+                  A=list(A_115,1),
+                  effects=list(spat.index,
+                          list(intercept=rep(1,nrow(dic_test_115)))),
+                  remove.unused = F,
+                 tag='est.barrier_115') 
+ 
+mod.barrier_115<-
+ inla(formula.barrier,
+      data=inla.stack.data(stk.barrier_115),
+      control.predictor=list(A=inla.stack.A(stk.barrier_115),compute=TRUE),
+      family="gaussian", 
+      control.family = list(hyper = hyper.iid),
+      control.inla= list(int.strategy = "eb"),
+      control.mode=list(restart=T, theta=c(13.5,-5,-2.1)))  
+
+field.barrier_115 = mod.barrier_115$summary.random$s$`0.5quant` + mod.barrier_115$summary.fixed['intercept', 'mean']
+
+stk.barrier_120 = inla.stack(data = list(y=dic_test_120$corrW),
+                  A=list(A_120,1),
+                  effects=list(spat.index,
+                          list(intercept=rep(1,nrow(dic_test_120)))),
+                  remove.unused = F,
+                 tag='est.barrier_120') 
+ 
+mod.barrier_120<-
+ inla(formula.barrier,
+      data=inla.stack.data(stk.barrier_120),
+      control.predictor=list(A=inla.stack.A(stk.barrier_120),compute=TRUE),
+      family="gaussian", 
+      control.family = list(hyper = hyper.iid),
+      control.inla= list(int.strategy = "eb"),
+      control.mode=list(restart=T, theta=c(13.5,-5,-2.1)))  
+
+field.barrier_120 = mod.barrier_120$summary.random$s$`0.5quant` + mod.barrier_120$summary.fixed['intercept', 'mean']
+
+stk.barrier_125 = inla.stack(data = list(y=dic_test_125$corrW),
+                  A=list(A_125,1),
+                  effects=list(spat.index,
+                          list(intercept=rep(1,nrow(dic_test_125)))),
+                  remove.unused = F,
+                 tag='est.barrier_125') 
+
+mod.barrier_125<-
+ inla(formula.barrier,
+      data=inla.stack.data(stk.barrier_125),
+      control.predictor=list(A=inla.stack.A(stk.barrier_125),compute=TRUE),
+      family="gaussian", 
+      control.family = list(hyper = hyper.iid),
+      control.inla= list(int.strategy = "eb"),
+      control.mode=list(restart=T, theta=c(13.5,-5,-2.1)))  
+
+field.barrier_125 = mod.barrier_125$summary.random$s$`0.5quant` + mod.barrier_125$summary.fixed['intercept', 'mean']
+
+stk.barrier_130 = inla.stack(data = list(y=dic_test_130$corrW),
+                  A=list(A_130,1),
+                  effects=list(spat.index,
+                          list(intercept=rep(1,nrow(dic_test_130)))),
+                  remove.unused = F,
+                 tag='est.barrier_130') 
+ 
+mod.barrier_130<-
+ inla(formula.barrier,
+      data=inla.stack.data(stk.barrier_130),
+      control.predictor=list(A=inla.stack.A(stk.barrier_130),compute=TRUE),
+      family="gaussian", 
+      control.family = list(hyper = hyper.iid),
+      control.inla= list(int.strategy = "eb"),
+      control.mode=list(restart=T, theta=c(13.5,-5,-2.1)))  
+
+field.barrier_130 = mod.barrier_130$summary.random$s$`0.5quant` + mod.barrier_130$summary.fixed['intercept', 'mean']
+
+# initial: (11,-2.4,2.4)
+# theta=c(13.5,-5,-2.1)))
+
+#monitor 
+# mod.barrier_105$internal.summary.hyperpar$mean
+# mod.barrier_130$internal.summary.hyperpar$mean
+  
+pred.barrier <- function(joint.stack,index.pred.response){
+join.output.barrier<-
+  inla(formula.barrier,
+       data=inla.stack.data(joint.stack),
+       control.predictor = list(A=inla.stack.A(joint.stack),compute=TRUE))
+
+# to get the predictions at the new locations
+df.pred.barrier<-
+  tibble(x = pred.grid$x,
+         y = pred.grid$y,
+         z = join.output.barrier$summary.fitted.values[index.pred.response,"mean"])
+
+return(df.pred.barrier)
+}
+
+
+df.pred.barrier_110 <- pred.barrier(joint.stack_110,index.pred.response_110)
+df.pred.barrier_115 <- pred.barrier(joint.stack_115,index.pred.response_115)
+df.pred.barrier_120 <- pred.barrier(joint.stack_120,index.pred.response_120)
+df.pred.barrier_125 <- pred.barrier(joint.stack_125,index.pred.response_125)
+df.pred.barrier_130 <- pred.barrier(joint.stack_130,index.pred.response_130)
+```
+
+```{r echo=FALSE, fig.align='center', fig.cap="To learn more about the effect of the barrier SGF, the plots at 14.03873kN were magnified to the main parts of the structure. We thoroughly research the transition of both edges and the area around the hole."}
+# magnifying
+par(mfrow=c(2,2))
+local.plot.field(field=field.barrier_110, mesh, zlim=c(-1,1),main=paste(),xlim=c(-20,20),ylim=c(-13,13))
+plot(poly.barrier, add=T, border="black", col="white",lwd=0.1)
+title(sub="Full scenary")
+
+local.plot.field(field=field.barrier_110, mesh, zlim=c(-1,1),main=paste(),xlim=c(-3,3),ylim=c(-3,3))
+plot(poly.barrier, add=T, border="black", col="white",lwd=0.1)
+title(sub="An area around the hole")
+
+local.plot.field(field=field.barrier_110, mesh, zlim=c(-1,1),main=paste(),xlim=c(-20,-13),ylim=c(-13,13))
+plot(poly.barrier, add=T, border="black", col="white",lwd=0.1)
+title(sub="Left edge")
+
+local.plot.field(field=field.barrier_110, mesh, zlim=c(-1,1),main=paste(),xlim=c(13,20),ylim=c(-13,13))
+plot(poly.barrier, add=T, border="black", col="white",lwd=0.1)
+title(sub="Right Edge")
+
+mtext("Magnifying the plots of the main part\n over the failure region at 14.03873kN", outer = TRUE, side = 3,line = -3)
+```
+
+Figure (5.6) shows that there a variation from -0.12 to 0.035 in the spatial effect of the barrier method. At the level 14.03873kN, malfunction is not started yet, so we need to magnify the main parts to look through the failure. Here, the lines of contours in the full scenary is not clear. To learn more about the effect of the barrier SGF, the plots, therefore, were magnified to the main parts of the structure. We thoroughly research the transition of both edges and the area around the hole. We can see that the region near the hole is detected to start with breaking down with the contours once we enlarge. Compared to the Figure (5.4) under the stationary models, we can see that there is no difference except around the hole or on the sides where the barrier model has larger values.
+
+```{r echo=FALSE, fig.cap="There is no difference significantly compared to the stationary models, the failure at 14.91892kN is detectable around the hole and on both sides of the study area."}
+
+# range(df.glued_105$diff) #-.005~.003
+# range(df.glued_130$diff) #-.05~.016
+# range(df.pred.barrier_105$z)
+# range(df.pred_105$median)
+# 
+# range(df.pred.barrier_125$z)
+# range(df.pred_125$median)
+# 
+# range(df.pred.barrier_130$z)
+# range(df.pred_130$median)
+
+pdata_110 <- transform(pred.grid, 
+                       pred_sp_w = predict(b_110, pred.grid, 
+                               type = "response"))
+
+pdata_115 <- transform(pred.grid,
+                       pred_sp_w = predict(b_115, pred.grid, 
+                               type = "response"))
+
+pdata_120 <- transform(pred.grid, 
+                       pred_sp_w = predict(b_120, pred.grid, 
+                               type = "response"))
+
+pdata_125 <- transform(pred.grid, 
+                       pred_sp_w = predict(b_125, pred.grid, 
+                               type = "response"))
+
+pdata_130 <- transform(pred.grid, 
+                       pred_sp_w = predict(b_130, pred.grid, 
+                               type = "response"))
+
+df.bind_110 <- bind_cols(pdata_110,df.pred.barrier_110) %>% 
+                  mutate(diff = pred_sp_w-z) 
+df.bind_110 <- data.frame(df.bind_110) %>% 
+                rename(x= x...1, y = y...2) %>% 
+                  select(x, y, diff)
+df.bind_115 <- bind_cols(pdata_115,df.pred.barrier_115) %>% 
+                  mutate(diff = pred_sp_w-z) 
+df.bind_115 <- data.frame(df.bind_115) %>% 
+                rename(x= x...1, y = y...2) %>% 
+                  select(x, y, diff)
+df.bind_120 <- bind_cols(pdata_120,df.pred.barrier_120) %>% 
+                  mutate(diff = pred_sp_w-z) 
+df.bind_120 <- data.frame(df.bind_120) %>% 
+                rename(x= x...1, y = y...2) %>% 
+                  select(x, y, diff)
+df.bind_125 <- bind_cols(pdata_125,df.pred.barrier_125) %>% 
+                  mutate(diff = pred_sp_w-z) 
+df.bind_125 <- data.frame(df.bind_125) %>% 
+                rename(x= x...1, y = y...2) %>% 
+                  select(x, y, diff)
+df.bind_130 <- bind_cols(pdata_130,df.pred.barrier_130) %>% 
+                  mutate(diff = pred_sp_w-z) 
+df.bind_130 <- data.frame(df.bind_130) %>% 
+                rename(x= x...1, y = y...2) %>% 
+                  select(x, y, diff)
+
+par(mfrow=c(1,3))
+local.plot.field(field.barrier_115, mesh, main=paste(), zlim=global.zlim,xlim=c(-20,20),ylim=c(-13,13))
+plot(poly.barrier, add=T, border="black", col="white")
+title(sub="15.37513kN")
+
+local.plot.field(field.barrier_120, mesh, main=paste(), zlim=global.zlim,xlim=c(-20,20),ylim=c(-13,13))
+plot(poly.barrier, add=T, border="black", col="white")
+title(sub="15.98287kN")
+
+local.plot.field(field.barrier_125, mesh, main=paste(), zlim=global.zlim,xlim=c(-20,20),ylim=c(-13,13))
+plot(poly.barrier, add=T, border="black", col="white")
+title(sub="16.5487kN")
+
+mtext("The plots for the barrier models over the failure", outer = TRUE, side = 3,line = -3)
+```
+
+More generally, the comparisons are conducted over the progress of the loading levels. The differences are not particularly disconcerned visually. As we cannot distinguish the differences between the stationary and the barrier models referred to as the SPDE method, the simulations will be compared numerically and statistically below. 
+
+
+### Differences between stationary and barrier models
+
+Here, even though there is no clear disparity between stationary and non-stationary models in the normal area, this result is meant to analyse the spatial data with the barrier model and to compare the effect between the models we used. Both sides of the coupon are cracked after the level of 16.5487kN and the area around the hole and both edges suffer deeply at 14.91892kN along the diagonal axis. We can not say which model is better yet with those plots above, however, the barrier model has larger values of spatial dependency statistically.  
+
+In this stage, we construct a structured additive model with Bayesian analysis using a jointly stacked data set and the predicted response varies according to the barrier model we set. To get the predictions at the new locations, we build a new data frame with the mean value of the simulated response variable. Making the plots consistent, we decide to use the same range (-0.12, 0.035). Figure (5.9) is shown that there is no significant change between the predicted barrier model and the stationary model with median because these two models yield obviously the same boundary and mesh. Even though we can not find any differences between the two models, the spatial decencies under the barrier models are slightly higher than those in stationary models. For example, whilst the minimum and maximum values of dependencies between two arbitrary points in the barrier model at the level of 14.91892kN are -0.34 and 0.097, respectively, the range in the stationary model is between -0.36 and 0.089 each. As can be seen on the right side of the figure (5.9), most values represent orange colour which is at around -0.0005 except for the edges of the boundary at 14.91892kN. That’s because the specimen starts suffering from both sides of the curve, there are noticeable differences in these parts. 
+Therefore, a high degree of spatial dependency means higher precision for the mean or median values of measure values [23]. Therefore, high dependency explains the similarities and differences based on the distances by a stochastic partial differential equation in this case. 
+
+
+```{r echo=FALSE,error=TRUE, fig.cap="The first two plots explain the spatial dependency under the stationary and non-stationary models. On the other hand, the last figure represents the difference between the two models to compare them.", fig.align='center'}
+r_pred_barrier <- c(-0.12,0.035)
+
+pred.barrier_plot <- function(df.pred.barrier,r_pred_barrier){
+plot_pred.barrier<-
+df.pred.barrier %>% 
+  ggplot(aes(x,y,z=z))+
+    stat_summary_2d(bins=150) + 
+        scale_fill_viridis_c(option="plasma",
+                             breaks=seq(r_pred_barrier[1],
+                             r_pred_barrier[2],length=5),
+                             limits=r_pred_barrier) + 
+        labs(subtitle = "Barrier") + coord_fixed()
+plot_pred.barrier
+}
+pred.median_plot <- function(df.pred,r_pred_barrier){
+plot_pred_median<-
+df.pred %>% 
+  ggplot(aes(x,y,z=median))+
+    stat_summary_2d(bins=150) + 
+        scale_fill_viridis_c(option="plasma",
+                             breaks=seq(r_pred_barrier[1],r_pred_barrier[2],length=5),
+                             limits=r_pred_barrier)+ labs(subtitle = "Stationary\n (median)") + coord_fixed()
+
+plot_pred_median
+}
+
+df.glued_110 <- bind_cols(df.pred_110,df.pred.barrier_110) %>% 
+                  mutate(diff = median-z)
+df.glued_115 <- bind_cols(df.pred_115,df.pred.barrier_115) %>% 
+                  mutate(diff = median-z)
+df.glued_120 <- bind_cols(df.pred_120,df.pred.barrier_120) %>% 
+                  mutate(diff = median-z)
+df.glued_125 <- bind_cols(df.pred_125,df.pred.barrier_125) %>% 
+                  mutate(diff = median-z)
+df.glued_130 <- bind_cols(df.pred_130,df.pred.barrier_130) %>% 
+                  mutate(diff = median-z)
+
+pred.barrier_plot_110 <- pred.barrier_plot(df.pred.barrier_110,r_pred_barrier)
+pred.barrier_plot_115 <- pred.barrier_plot(df.pred.barrier_115,r_pred_barrier)
+pred.barrier_plot_120 <- pred.barrier_plot(df.pred.barrier_120,r_pred_barrier) 
+pred.barrier_plot_125 <- pred.barrier_plot(df.pred.barrier_125,r_pred_barrier) 
+pred.barrier_plot_130 <- pred.barrier_plot(df.pred.barrier_130,r_pred_barrier) 
+
+pred.median_plot_110 <- pred.median_plot(df.pred_110,r_pred_barrier)
+pred.median_plot_115 <- pred.median_plot(df.pred_115,r_pred_barrier)
+pred.median_plot_120 <- pred.median_plot(df.pred_120,r_pred_barrier)
+pred.median_plot_125 <- pred.median_plot(df.pred_125,r_pred_barrier)
+pred.median_plot_130 <- pred.median_plot(df.pred_130,r_pred_barrier) 
+# range(df.glued_110$diff)
+# range(df.glued_125$diff)
+
+diff_spde_110 <-
+df.glued_110 %>% 
+  ggplot(aes(x...1,y...2,z=diff))+
+    stat_summary_2d(bins=150) + 
+        scale_fill_viridis_c(option="plasma",
+                             breaks=seq(-0.02,0.007,length=5),
+                             limits=c(-0.02,0.007))+
+        labs(subtitle = "14.71418kN") +
+          xlab('x') + ylab('y') + 
+          coord_fixed() + theme(legend.position = "none")
+
+diff_spde_115 <-
+df.glued_115 %>% 
+  ggplot(aes(x...1,y...2,z=diff))+
+    stat_summary_2d(bins=150) + 
+        scale_fill_viridis_c(option="plasma",
+                             breaks=seq(-0.02,0.007,length=5),
+                             limits=c(-0.02,0.007))+
+        labs(subtitle = "15.37513kN") +
+          xlab('x') + ylab('y') + 
+          coord_fixed()
+
+diff_spde_120 <- 
+df.glued_120 %>% 
+  ggplot(aes(x...1,y...2,z=diff))+
+    stat_summary_2d(bins=150) + 
+        scale_fill_viridis_c(option="plasma",
+                             breaks=seq(-0.02,0.007,length=5),
+                             limits=c(-0.02,0.007))+
+        labs(subtitle = "15.98287kN") +
+          xlab('x') + ylab('y') + 
+          coord_fixed() + theme(legend.position = "none") 
+diff_spde_125 <- 
+df.glued_125 %>% 
+  ggplot(aes(x...1,y...2,z=diff))+
+    stat_summary_2d(bins=150) + 
+        scale_fill_viridis_c(option="plasma",
+                             breaks=seq(-0.02,0.007,length=5),
+                             limits=c(-0.02,0.007))+
+        labs(subtitle = "16.5487kN") +
+          xlab('x') + ylab('y') + 
+          coord_fixed() 
+
+
+((diff_spde_110+diff_spde_115)/(diff_spde_120+diff_spde_125))+ plot_annotation(title = "Comparing predictions between two models")
+
+```
+
+## Differences between soap film smoothing and SPDE approaches
+
+Here, we investigate two methods for spatial dependency. While there is a similarity to use an additive model to implement both approaches, there are differences.
+First, we can apply SPDE methods regardless of defining the boundary, however, we should apply the different techniques for the soap film smoother depending on whether the boundary is known or not. And the main difference is to apply to the Bayesian inference. Using posterior, we alleviate the uncertainty and predict the values at a certain location precisely. Even though soap film smoothing and SPDE approaches are robust and more realistic compared to the conventional models, for example, the stationary model in our case, we can not say which one is a good model. SPDE method is computational efficiency and reflects the large uncertainty near the boundary [14], however, it leads overparametrisation when the boundary is severely complex. 
+
+
+```{r echo=FALSE, fig.cap="Even though there are no significant differences until 16.5487kN, the edges of both curves show big differences at 14.91892kN."}
+# range(df.bind_105$diff, na.rm=T) # -0.05479136  0.03966395
+# range(df.bind_125$diff, na.rm=T) # -0.054,0.051
+diff.plot_110 <- 
+df.bind_110 %>%
+  ggplot(aes(x,y,z=diff))+
+    stat_summary_2d(bins=150) +
+        scale_fill_viridis_c(option="plasma",
+                             breaks=seq(-0.054,0.051,length=5),
+                             limits=c(-0.054,0.051))+
+        labs(subtitle = "14.71418kN") +
+          coord_fixed() + xlab("CorrX") + ylab("CorrY")
+
+diff.plot_115 <- 
+df.bind_115 %>%
+  ggplot(aes(x,y,z=diff))+
+    stat_summary_2d(bins=150) +
+        scale_fill_viridis_c(option="plasma",
+                             breaks=seq(-0.054,0.051,length=5),
+                             limits=c(-0.054,0.051))+
+        labs(subtitle = "15.37513kN") +
+          coord_fixed() + xlab("CorrX") + ylab("CorrY")
+
+diff.plot_120 <- 
+df.bind_120 %>%
+  ggplot(aes(x,y,z=diff))+
+    stat_summary_2d(bins=150) +
+        scale_fill_viridis_c(option="plasma",
+                             breaks=seq(-0.054,0.051,length=5),
+                             limits=c(-0.054,0.051))+
+        labs(subtitle = "15.98287kN") +
+          coord_fixed() + xlab("CorrX") + ylab("CorrY")
+
+diff.plot_125 <- 
+df.bind_125 %>%
+  ggplot(aes(x,y,z=diff))+
+    stat_summary_2d(bins=150) +
+        scale_fill_viridis_c(option="plasma",
+                             breaks=seq(-0.054,0.051,length=5),
+                             limits=c(-0.054,0.051))+
+        labs(subtitle = "16.5487kN") +
+          coord_fixed() + xlab("CorrX") + ylab("CorrY")
+# range(df.bind_130$diff, na.rm=T)
+diff.plot_spde <-
+df.bind_130 %>%
+  ggplot(aes(x,y,z=diff))+
+    stat_summary_2d(bins=50) +
+        scale_fill_viridis_c(option="plasma",
+                             breaks=seq(-0.32,0.19,length=5),
+                             limits=c(-0.32,0.19))+
+        labs(subtitle = "Differences") +
+          coord_fixed() + xlab("CorrX") + ylab("CorrY")
+
+
+((diff.plot_110+diff.plot_115)/(diff.plot_120+diff.plot_125))+plot_annotation(title = "Differences between Soap film smoothing and SPDE approaches")
+```
+
+
+## Finite element spatial splines approach
+
+The last method to deal with the complex boundary, is spatial spline regression which is semi-parametric on the finite field. Similar to the procedure of spatial models based on stochastic partial differential equations, the mesh has to be constructed. Upon the mesh, the size of triangulation is implemented by the distance between arbitrary data points for the whole boundary. On the other hand, this approach is also using the penalised sum-of-square error in the additive term like soap film smoothing. The normal derivatives of $f$ on boundary condition are, therefore, 0 theoretically. Based on chapter 4 of methodology, we analyse thoroughly this approach with the parameters. 
+
+By using the \texttt{fdaPDE} in R, the process of this approach is implemented with mesh, basis functions and predictions. Note that the number of **K** is 15,000 nodes and $\xi_k$ might be the vertices of triangles from neighbours obtained by function create.FEM.basis(). The aim of the solution $z$ of the covariates $x$ and $y$ coordinates at the 15,000 randomly extracted is to predict displacements $w$. As covariate, we use the binary variable indicating whether or not a tract is predominantly failure points (1) or ordinary area (0) for the observation of information density [25]. 
+
+```{r spline_modelling, echo=FALSE, error=TRUE, message=FALSE, results='hide'}
+mesh_110 <- create.mesh.2D(nodes = locations_110, 
+                           holes = hole.grid)
+mesh_115 <- create.mesh.2D(nodes = locations_115, 
+                           holes = hole.grid)
+mesh_120 <- create.mesh.2D(nodes = locations_120, 
+                           holes = hole.grid)
+mesh_125 <- create.mesh.2D(nodes = locations_125, 
+                           holes = hole.grid)
+mesh_130 <- create.mesh.2D(nodes = locations_130, 
+                           holes = hole.grid)
+
+FEMbasis_110 = create.FEM.basis(mesh_110)
+FEMbasis_115 = create.FEM.basis(mesh_115)
+FEMbasis_120 = create.FEM.basis(mesh_120)
+FEMbasis_125 = create.FEM.basis(mesh_125)
+FEMbasis_130 = create.FEM.basis(mesh_130)
+lambda = 10^(-4:2)
+
+solution_110 = smooth.FEM(locations=locations_110,
+                          observations = dic_test_110$corrW, 
+                          FEMbasis = FEMbasis_110, 
+                          lambda = lambda, 
+                          lambda.selection.criterion='grid',
+                          lambda.selection.lossfunction = 'GCV',
+                          DOF.evaluation = 'stochastic')
+solution_115 = smooth.FEM(locations=locations_115,
+                          observations = dic_test_115$corrW, 
+                          FEMbasis = FEMbasis_115, 
+                          lambda = lambda, 
+                          lambda.selection.criterion='grid',
+                          lambda.selection.lossfunction = 'GCV',
+                          DOF.evaluation = 'stochastic')
+solution_120 = smooth.FEM(locations=locations_120,
+                          observations = dic_test_120$corrW, 
+                          FEMbasis = FEMbasis_120, 
+                          lambda = lambda, 
+                          lambda.selection.criterion='grid',
+                          lambda.selection.lossfunction = 'GCV',
+                          DOF.evaluation = 'stochastic')
+solution_125 = smooth.FEM(locations=locations_125,
+                          observations = dic_test_125$corrW, 
+                          FEMbasis = FEMbasis_125, 
+                          lambda = lambda, 
+                          lambda.selection.criterion='grid',
+                          lambda.selection.lossfunction = 'GCV',
+                          DOF.evaluation = 'stochastic')
+solution_130 = smooth.FEM(locations=locations_130,
+                          observations = dic_test_130$corrW, 
+                          FEMbasis = FEMbasis_130, 
+                          lambda = lambda, 
+                          lambda.selection.criterion='grid',
+                          lambda.selection.lossfunction = 'GCV',
+                          DOF.evaluation = 'stochastic')
+```
+
+
+### Predictions
+
+```{r echo=FALSE, fig.cap="The colour indicates the degree of the spatial dependencies under the spatial spline method on the finite field. Both edges start crack and the area around the hole suffers when the coupon is malfunction.", fig.align='center'}
+predW_110 <- solution_110$solution$z_hat
+predW_115 <- solution_115$solution$z_hat
+predW_120 <- solution_120$solution$z_hat
+predW_125 <- solution_125$solution$z_hat
+predW_130 <- solution_130$solution$z_hat
+
+
+pred_spline2 <- bind_cols(locations_110,predW_110) %>% 
+                  rename(x=`...1`,
+                         y=`...2`,
+                         z=`...3`) %>% 
+                    ggplot(aes(x,y,z=z))+
+                    stat_summary_2d(bins=70) + 
+                    scale_fill_viridis_c(option="plasma",
+                                         breaks=seq(-0.12,0.035,length=5),
+                                         limits=c(-0.12,0.035))+
+                    labs(subtitle="14.71418kN")+
+                    xlab("CorrX") + 
+                    ylab("CorrY") +
+                    coord_fixed()
+pred_spline3 <- bind_cols(locations_115,predW_115) %>% 
+                  rename(x=`...1`,
+                         y=`...2`,
+                         z=`...3`) %>% 
+                    ggplot(aes(x,y,z=z))+
+                    stat_summary_2d(bins=60) + 
+                    scale_fill_viridis_c(option="plasma",
+                                         breaks=seq(-0.12,0.035,length=5),
+                                         limits=c(-0.12,0.035))+
+                    labs(subtitle="15.37513kN")+
+                    xlab("CorrX") + 
+                    ylab("CorrY") +
+                    coord_fixed()
+pred_spline4 <- bind_cols(locations_120,predW_120) %>% 
+                  rename(x=`...1`,
+                         y=`...2`,
+                         z=`...3`) %>% 
+                    ggplot(aes(x,y,z=z))+
+                    stat_summary_2d(bins=60) + 
+                    scale_fill_viridis_c(option="plasma",
+                                         breaks=seq(-0.12,0.035,length=5),
+                                         limits=c(-0.12,0.035))+
+                    labs(subtitle="15.98287kN")+
+                    xlab("CorrX") + 
+                    ylab("CorrY") +
+                    coord_fixed()
+
+pred_spline5 <- bind_cols(locations_125,predW_125) %>% 
+                  rename(x=`...1`,
+                         y=`...2`,
+                         z=`...3`) %>% 
+                    ggplot(aes(x,y,z=z))+
+                    stat_summary_2d(bins=60) + 
+                    scale_fill_viridis_c(option="plasma",
+                                         breaks=seq(-0.12,0.035,length=5),
+                                         limits=c(-0.12,0.035))+
+                    labs(subtitle="16.5487kN")+
+                    xlab("CorrX") + 
+                    ylab("CorrY") +
+                    coord_fixed()
+
+# range(solution_105$solution$z_hat) # -0.02~0.01
+# range(solution_125$solution$z_hat) # -0.08,0.02
+((pred_spline2+theme(legend.position = "none")+pred_spline3)/
+(pred_spline4+theme(legend.position = "none")+pred_spline5+theme(legend.position = "none"))) + plot_annotation(title="Predicted plots for spatial spline regression")
+
+```
+
+The described plots are represented by the simulations of the data by spatial spline regression. This prediction was implemented to solve the problems by partial differential equations (PDEs) and has some white spots where they are missing as outliers in the original data had been removed. That's because those values which are not near the hole or boundary are not in our interest, and we will not consider them anymore. Since the top and bottom lines of the specimen are also auxiliary to understanding to define the boundary, spatial dependency will not be regarded as suffered. When both curved edges are focused, we can see the numbers of dependencies are getting away from 0 once the magnitude of the load force. 
+
+In terms of failure points, we can say this coupon broke down at 16.5487kN. The area near the hole is not clearly suffered yet, however, the cracks start from the left-upper side to the right-bottom by a diagonal axis. Obviously, the differences in values are not huge, however, this analysis is meaningful to identify the effects of ply thickness and fibre orientation over the boundary. 
+
+This method is quite difficult to do the prediction for arbitrary points through the fdaPDE package in R. It is possible, but it is tricky to predict the values appropriately. While the other methods provide the command predict() to easily do simulations, like a wrapper that we can take the output after fitting and put it in the predictions, it can only anticipate the points we have given it initially in the observations. Spatial spline regression, rather than 19,024 data points of the prediction grid for soap film smoother and SPDE, cannot have a 1:1 comparison unfortunately because there are locations equal to the number of 15,000 samples.
+
+## Analysis when the specimen towards failure
+
+Whilst no significant difference could be seen in the predictions between the methods when the specimen was not close to failure, we expect generally to see huge differences when the study area suffers severely. Typically, we can get more precise predictions when the sample size is bigger or the parameters get higher values. Even though the sample size is the same, the parameters and hyperparameters can get higher values in this case. We will do the same spatial analysis above, and see how big the differences between soap film smoother, stochastic partial differential equations and spatial spline regression models are. 
+
+```{r, echo=FALSE, fig.align='center', fig.cap="The right plot represents the result of soap film smoothing, and the left one is to express the differences in the values between the real data and predictions by soap film smoother."}
+# range(df.pred.barrier_130$z)
+pred.stationary<-
+    df.pred_130 %>%
+      ggplot(aes(x,y,z=median))+
+        stat_summary_2d(bins=150) +
+        scale_fill_viridis_c(option="plasma",
+                             breaks=seq(-0.35,0.07,length=5),
+                             limits=c(-0.35,0.07))+
+        labs(subtitle ="Stationary model") +
+          coord_fixed()
+
+
+
+pred.barrier_plot_130<-
+df.pred.barrier_130 %>% 
+  ggplot(aes(x,y,z=z))+
+    stat_summary_2d(bins=150) + 
+        scale_fill_viridis_c(option="plasma",
+                             breaks=seq(-0.35,0.07,length=5),
+                             limits=c(-0.35,0.07)) + 
+        labs(subtitle = "SPDE") + coord_fixed()
+
+pred_spline5 <- bind_cols(locations_130,predW_130) %>% 
+                  rename(x=`...1`,
+                         y=`...2`,
+                         z=`...3`) %>% 
+                    ggplot(aes(x,y,z=z))+
+                    stat_summary_2d(bins=60) + 
+                    scale_fill_viridis_c(option="plasma",
+                                         breaks=seq(-0.35,0.07,length=5),
+                                         limits=c(-0.35,0.07))+
+                    labs(subtitle="Spline regression")+
+                    xlab("CorrX") + 
+                    ylab("CorrY") +
+                    coord_fixed()
+
+
+
+# range(df.glued_130$diff) #-0.10305828  0.03843935
+diff.spde <- 
+  df.glued_130 %>% 
+  ggplot(aes(x...1,y...2,z=diff))+
+    stat_summary_2d(bins=150) + 
+        scale_fill_viridis_c(option="plasma",
+                             breaks=seq(-0.1,0.04,length=5),
+                             limits=c(-0.1,0.04))+
+        labs(subtitle = "stationary-barrier\ndifferences") +
+          xlab('x') + ylab('y') + 
+          coord_fixed()
+
+combined_plot6_soap+ diff.plot_soap + plot_annotation(title="Predictions from soap film smoothing\n and the differences as data given from the experiment at 14.91892kN")
+```
+
+When we do the comparison between soap film smoothing and the data given, we can see that the missing values as the white part in the plot above are predicted well. Further, the pattern which is suffered from compression-shearing look similar to each other. However, the range of spatial dependence is huge from -0.35 to -0.7 than that from the plots (5.1) when the specimen is not close to breaking down. For this reason, the plot on the right side shows that general predictions within the study area of interest are quite well-defined, however, some parts alongside a cracking pattern are meant to be difficult to conduct predictions. We will explore the rest of the methods and compare them below.
+
+
+```{r echo=FALSE, fig.cap="When the performed comparison between the stationary model using the median as a conventional way and the barrier model, significant changes could not be found."}
+(pred.barrier_plot_130+pred.stationary)+plot_annotation(title="Comparison between barrier model and stationary model")
+```
+
+To measure the performance of the models, one of the good methodologies is to compare the traditional and challenging models. In our case, even though we have a hole in the centre within the boundary, we will see how to work in the stationary model. In the paper [14], It is said that the performance of the barrier model was more excellent than the stationary model. Nonetheless, the plots look much similar visually and cannot be found noticeable differences.
+
+
+```{r echo=FALSE, fig.cap="There are some meaningful differences in the area around the hole and the curved edges a little bit.", fig.height=3, fig.align='center'}
+diff.spde+plot_annotation(title="Differences between the barrier model and stationary model\nwhen the specimen fails")
+options(repr.diff.spde.width = 3, repr.diff.spde.height = 3)
+```
+
+By drawing the plots for differences between stationary and barrier models, the area around the hole and the edges has a few distinctions. Those parts commonly do not distinguishable, the level of spatial dependency almost converges to -0.1.
+
+```{r echo=FALSE, fig.cap="Guessing most of the values in the difference plot is nearly close to 0, but the predictions by the diagonal pattern in the plot are significantly dissimilar."}
+pred_plot6 + theme(legend.position = "none") + pred.barrier_plot_130+diff.plot_spde + plot_annotation(title="Plots for prediction under soap film smoothing and SPDE\nand for difference")
+```
+
+Unlike the corollary from soap film smoother in the figure (5.9), the resolution of the SPDE looks more clear. The suffered area and cracks are predicted well and the values of the body of the specimen are nearly close to 0. As the range is set from -0.35 to 0.07 for the predictions to compare consistently, the grey part of the edges would be the outlier. In other words, the range of predictions under soap film smoothing is wider than that of the SPDE. Furthermore, a plot representing the differences indicates that soap film smoothing and the SPDE methods are significantly distinguished. While the range is from -0.054 to 0.051 with the data experimented with where the specimens are not cracked, the range is between -0.32 and 0.19 when the coupon almost failed. Compared to the plot (5.9) above, we can see that the gap in spatial dependence between soap film smoothing and the SPDE approaches is huge. 
+
+```{r echo=FALSE, fig.cap="By putting the plots in a row, we can easily compare the performances between models visually."}
+combined_plot6_soap/(pred.barrier_plot_130+theme(legend.position = "none")+pred_spline5)+plot_annotation(title="General predictions by the methodologies")
+```
+
+We cannot compare the models between spatial spline regression and others due to tricky implementation without predict command. Instead, comparisons will be conducted visually. As can be seen above, the spatial spline method cannot predict the missing data as the white parts in contrast to the two methods above. Whilst this technique also performs well in the area near the hole and the curved borders where the suffers a lot, it could be seen that near the area broke down is not properly anticipated. I will mention the conclusion in terms of methodology and effects in the next chapter. 
+
+<!--chapter:end:03-chap3.Rmd-->
+
+# Conclusion {#con}
+
+In this project, we focused on three approaches to identify the spatial dependency over the loading of the complicated boundary theoretically and practically using the additive models and the Bayesian inference to solve the problem of partial differential equations and then perform spatial-temporal analysis. In the previous chapter, we investigated the specific conclusions with each technique, however, the general conclusion will be discovered in this chapter from the analysis. Alongside this, we will make suggestions to develop the research in the future and see the possibilities to adopt in the area. 
+
+## Results of the Analysis
+
+All spatial methods are able to reconstruct the boundary quite faithfully. Upon them, we've seen spatial predictions and they look very close. Apparently, each method gives an estimation or a simulation which is very close to the initial data. When we compare the methods themselves, for example, soap-film spatial splines, the SPDE and spatial spline regression, although all the methods are quite similar, we still see small differences between them. 
+
+Although there are pros and cons to each model, we are not able to convince which methods are better than others for this experiment because we are using the same data and the methods are not completely independent. Instead, we can see how big differences between predictions from the models. With the plots at 14.91892kN where the specimen starts broken, the differences will be underlined more specifically. 
+
+```{r echo=FALSE, fig.align='center', fig.cap="Once the loading levels increase closer to failure, the spatial behaviour is more informative. Compared to the plots with the original data, the predictions look similar, however, there are some differences between the models significantly.", fig.height=3, fig.align='center'}
+plot6+plot7+plot_annotation(title="Spatial dependency when the data sets got closer to fail")
+```
+
+As has been emphasized several times, our boundary is complex as there is a hole in the centre of the boundary. Therefore, it is important to highlight the difference between soap film smoothing, spatial models based on stochastic partial differential equations and spatial spline regression approaches to perform this analysis. In other words, the soap film smoothing is beneficial to be controlled in any case. Moreover, it's straightforward to apply using the package \texttt{mgcv} and computational efficient [13]. Similarly, spatial models based on stochastic partial differential equations (SPDE) take an almost identical time as the stationary models. Also, these two methods enable to use of the Dirichlet boundary condition when the boundary is known. In this case of the SPDE method, we assumed that the boundary is unknown and this approach reflected lots of uncertainties near the hole like in the practice. On the other hand, it has crucial cons to managing massive parameters and hyperparameters. With respect to the spatial spline regression, using partial differential equations and constructing a mesh over the study area of interest is similar to the SPDE approach [14]. 
+
+
+We cannot say any particular winner among those methods, however, the more efficient one which is easier to implement or explain is soap film smoothing. For this, we took a sample of the data instead of using the whole locations and **K**, $k_1$, $k_2$ and nmax to make it a little bit more efficient computationally. However, we can get more resolution and details if we choose more samples or increase the values. Then it would take longer. The other advantage of this and the SPDE is effortlessly implementable to predict in R using predict() command, unlike the spatial spline regression. Thus, this method is generally the fastest, so I would recommend this application for spatial dependence to identify spatial dependency with a complicated boundary.
+
+
+## Future Work
+
+Even though all methods we used are different, the results look similar. When we compare them with the data, they all look much the same in particular. It is only when we compare them against themselves, that there are small differences. A possible goal of future research could find the real differences and the other and reproduce the behaviour not only spatially, but also when load increases or the orientations changes. It is undeniable to see more damage, colours visually and behaviour around the hole and curved edges once the loading levels increase. 
+
+In this spatial analysis with sophisticated methods such as soap-film spline or the SPDE, we can find the benefits of using those methods rather than the traditional techniques when we have a larger load which is closer to failing or breaking. Taking these into account, another feasible area for further study aided by this would be to dig into the variations between approaches when the loads get toward failure and introduce the blessings to the aerospace industry. 
+
+To summarise, from this work on the experiment data, we controlled to offer that the ability of correlation for spatial analysis must always be investigated and with the ideal analysis is feasible to offer profitable inferences on data sets that have a compatible setting. Lastly, with the application of diverse theorems, for example, additive models and Bayesian inference, the predictions will also benefit and be of value to the persevering with the exploration of the aerospace field.
+
+<!--chapter:end:04-conclusion.Rmd-->
+
+<!--
+The bib chunk below must go last in this document according to how R Markdown renders.  More info is at http://rmarkdown.rstudio.com/authoring_bibliographies_and_citations.html
+-->
+
+\backmatter
+
+<!-- 
+If you'd like to change the name of the bibliography to something else,
+delete "References" and replace it.
+-->
+
+# References {-}
+<!--
+This manually sets the header for this unnumbered chapter.
+-->
+\markboth{References}{References}
+<!--
+To remove the indentation of the first entry.
+-->
+\noindent
+
+<!--
+To create a hanging indent and spacing between entries. This line may need 
+to be removed for styles that don't require the hanging indent.
+-->
+
+\setlength{\parindent}{-0.20in}
+
+[1] Iata, 2022. [online] Iata.org. Available from: https://www.iata.org/en/iata-repository/publications/economic-reports/air-passenger-monthly-analysis---february-2022/ [Accessed 6 July 2022]. \
+
+[2] Wikipedia, n.d. Aviation accidents and incidents [online] En.wikipedia.org. Available from: https://en.wikipedia.org/wiki/Aviation_accidents_and_incidents#cite_note-b3aCrashs-59 [Accessed 6 July 2022]. \
+
+[3] Airbus, n.d. A350 Less Operating Cost. More Capabilities.. [online] Aircraft.airbus.com. Available from: https://aircraft.airbus.com/en/aircraft/a350/a350-less-operating-cost-more-capabilities [Accessed 6 July 2022].\
+
+[4] R. M. Jones, 1975, Mechanics of composite materials, second edition, Taylor&Francis, pp1-18. \
+
+[5] Rowe, F. and Arribas-Bel, D., n.d. Chapter 10 Spatio-Temporal Analysis | Spatial Modelling for Data Scientists. [online] Gdsl-ul.github.io. Available from: https://gdsl-ul.github.io/san/sta.html#spatio-temporal-data-structures [Accessed 20 July 2022].\
+
+[6] Correlated Solutions, 2020. Digital Image Correlation (DIC): Overview of Principles and Software. [video] Available from: https://www.youtube.com/watch?v=kfP9XRz2vo0&t=157s [Accessed 4 Sep. 2022].\
+
+[7] Wikipedia, n.d. Tension (physics) [online] En.wikipedia.org. Available from: https://en.wikipedia.org/wiki/Tension_(physics) [Accessed 4 Aug 2022].\
+
+[8] Boston University, 2022. Mechanics of Materials: Strain » Mechanics of Slender Structures [online] Bu.edu. Available from: https://www.bu.edu/moss/mechanics-of-materials-strain/ [Accessed 4 Aug 2022].\
+
+[9] Wikipedia, n.d. Compression (physics) [Online]. Available from: https://en.wikipedia.org/wiki/Compression_(physics) [Accessed 6 Aug 2022].\
+
+[10] BYJUS. n.d. Shearing Stress - Definition, Examples, Units, Formula, Meaning. [online]  Available from: https://byjus.com/physics/shearing-stress/ [Accessed 6 Aug 2022].\
+
+[11] Tobias Laux et al, 2020, Ply thickness and fibre orientation effects in multidirectional composite
+laminates subjected to combined tension/compression and shear.\
+
+[12] Simon N. Wood, 2013, Generalized Additive Models:An introduction with R, pp161-182.\
+
+[13] Simon N. Wood et al, 2008, Soap film smoothing.\
+
+[14] Bakka, H et al, 2019, Non-stationary Gaussian models with physical barriers.\
+
+[15] Larsen, K., 2015. GAM: The Predictive Modeling Silver Bullet. [online] Available from: https://www.scribd.com/document/427899164/Gam [Accessed 10 Aug 2022].\
+
+[16] Bakka, H., 2019. Simulation and inference with the Barrier model. [online] Available from: https://haakonbakkagit.github.io/btopic103.html [Accessed 10 Aug 2022].\
+
+[17] Serafini, F., Zheng, R. and Bakka, H., 2021. Polygons and Coastlines. [online] Available from: https://haakonbakkagit.github.io/btopic127.html [Accessed 10 Aug 2022].\
+
+[18] Amratia, P., Rumisha, S., Python, A. and Hancock, P., 2019. Introduction to INLA for geospatial modelling. [online] Available from: https://punama.github.io/BDI_INLA/ [Accessed 12 Aug. 2022].\
+
+[19] Blangiardo, M. and Cameletti, M., 2015. Spatial and spatio-temporal Bayesian models with R-INLA. Chichester: Wiley.\
+
+[20] Hertzog, L., 2020. Spatial regression in R part 2: INLA | DataScience+. [online] Available from: https://datascienceplus.com/spatial-regression-in-r-part-2-inla/ [Accessed 12 Aug 2022].\
+
+[21] Gómez-Rubio, V., 2021. Chapter 5 Priors in R-INLA | Bayesian inference with INLA. [online] Available at: https://becarioprecario.bitbucket.io/inla-gitbook/ch-priors.html#sec:pcpriors [Accessed 13 Aug 2022].\
+
+[22] Krainski E. T. et al., 2019. Advanced spatial modeling with stochastic partial differential equations using R and INLA. Boca Raton: CRC Press/Taylor and Francis Group.\
+
+[23] Wikipedia, n.d. Spatial dependence [online] Available from: http://wiki.gis.com/wiki/index.php/Spatial_dependence [Accessed 16 Aug 2022].\
+
+[24] Wikipedia, n.d. Semiparametric model [online] Available from: https://en.wikipedia.org/wiki/Semiparametric_model [Accessed 20 Aug. 2022].\
+
+[25] Sangalli, LM et al, 2013, Spatial Spline Regression models.
+
+<!--chapter:end:99-references.Rmd-->
+
